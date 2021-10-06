@@ -1,0 +1,965 @@
+//Labyrinth with parasites 24 boxes - parasitation based on ingestion
+//suggested:
+//end time: 873600 intervall: 16800
+
+
+// PARAMETERS
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+
+//Euler's number
+//-> known mathematical constant
+//-> no source needed
+e	:2.71828;
+
+//starvation increment in [g]
+//-> ammount of body mass decrease for standard metabolic rate and a gain of 4 JPO
+//-> energy-mass-balance considerations (based on average energy density of body mass)
+si	:0.0005;
+
+//growth increment in [g]
+//-> ammount of body mass increase exchanged for 12 JPO
+//-> energy-mass-balance considerations
+gi	:0.00587;
+
+//standard body mass factor
+//-> a from W=a*L^b (W in [g], L in [cm] from standard weight in fish)
+//-> from Thuenen Data
+aa	:0.00743;
+
+//standard body mass exponent
+//-> b for W=a*L^b (W in [g], L in [cm] from standard weight in fish)
+//-> from Thuenen Data
+bb	:3.06;
+
+//length growth threshold
+//-> condition factor threshold below which length growth is suspended
+//-> based on DUTIL et al 2000
+lgt	:0.8;
+
+//mass growth threshold
+//-> condition factor threshold above which length growth is suspended
+//-> based on DUTIL et al 2000
+mgt	:1.2;
+
+//lethal condition factor threshold
+//-> condition factor threshold for low-condition-mortality
+//-> based on DUTIL et al 2000
+lcft	:0.6;
+
+//level of parasite infestation
+// -> variable for scanning experiments
+lop	:0;
+
+
+
+//FUNCTIONS		-> 1 hour = 100TU  
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+
+//linear body mass factor
+//-> scales rates linearly for body mass of individual	
+//-> required to reproduce wet-lab equations
+lbmf:: num -> num;
+lbmf bm = (bm/10000);
+
+//acitve metabolic rate
+//-> gives the rate for maximum oxygen intake dependent on oxygen saturation and temperature
+//-> taken from: 	Influence of water temperature and oxygenation on the aerobic metabolic scope of Atlantic cod (Gadus morhua)
+//					Claireaux et al. 2000
+amr:: num -> num -> num;
+amr ox temp = (1-(e)^(0.34-0.035*ox))*(30.01+17.29*(temp)^(1.062-0.015*temp));
+
+//standard metabolic rate
+//-> gives the rate for basal metabolic rate
+//-> taken from: 	Influence of water temperature and oxygenation on the aerobic metabolic scope of Atlantic cod (Gadus morhua)
+//					Claireaux et al. 2000			
+smr:: num -> num;	
+smr temp = (80.1*(1-(e)^(-0.185*(temp)^(0.79))));
+
+//length gain
+//-> calculates the gain in length according to a given gain in mass allometrically
+//-> taken from:	Thünen Data on on growth			 
+lg:: num -> num;
+lg bm = (((bm)/aa)^(1/bb)-((bm-gi)/aa)^(1/bb))*10;
+
+//exponential body mass factor
+//-> scales rates exponentially for body mass of individual
+ebmf:: num -> num;	
+ebmf bm = bm^(1/3);
+
+//temperature dependency
+//-> scales rates for body-mass dependent temperature optimum
+//-> derived from:	Optimal temperature for growth and feed conversion of immature cod (Gadus morhua L.)
+//					Björnsson 2001
+td:: num -> num -> num;
+td temp bm = (-0.007*(temp - (22*(bm)^(-0.1507)))^(2) + 1);
+
+//condition factor
+// calculates the condition factor
+//-> established ratio	
+cf:: num -> num -> num;
+cf l bm = (100000*bm)/((l)^(3));
+
+//maximum stomach volume
+msv:: num -> num;
+msv bm = (bm*70/13);
+
+//oxygen dependent appetite
+oda:: num -> num;
+oda ox = 0.93*(1 - (e)^(-0.03*(ox - 10)));
+
+//food intake level 
+// number AJPO, parasites, variability , body mass, oxygen, temperature
+fil :: num -> num -> num -> num -> num -> num -> num;
+fil xn xpara xv xbm xo xt =  if (xn < (dapl(xpara) * xv * 0.1 * (xbm*70/13) * (0.93*(1-(e)^(-0.03*(xo-10)))) * (-0.007*(xt-(22*(xbm)^(-0.1507)))^(2)+1))) then 1 else 0;
+
+//parasite assignment
+//-> assigns parasites to prey
+//-> source for ratio required
+paraass :: num -> num; 
+paraass 0 = 0;
+paraass 1 = 1;
+paraass r = if (x < r) then 1 else 0 where x = unif(0,1);
+
+//sigmoidal increase of parasites
+// -> experimental function; carrying capacity at 20 total reached after influx of 100 infected fish
+spi :: num -> num -> num;
+spi 0 0 = 0;
+spi 0 1 = 0.14783;
+spi y x = 20/(1+(e)^(-0.1*(((10*log(-y/(y-20))+50)+x)-50)));
+
+//decreased standard metabolic rate through parasite infestation
+dsmr :: num -> num;
+dsmr x = (x*0.635);
+
+//decreased apetite under parasite load
+//decreased digestive tissue available when infested whith Contracaecum osculatum	
+dapl :: num -> num;
+dapl 0 = 1;
+dapl x = 1-(x*0.025);
+
+//sex assignment
+//-> assigns sex to hatched larvae
+//-> source for ratio required
+sexass :: num; 
+sexass = if (x < 0.51) then 0 else 1 where x = unif(0,1);
+
+//stock affiliation combination
+//-> assigns stockk affiliation dependent on stockk affiliation of parents
+stacomb :: string -> string -> string;
+stacomb 'W' 'W' = 'W';
+stacomb 'W' 'E' = 'H';
+stacomb 'E' 'W' = 'H';
+stacomb 'E' 'E' = 'E';
+stacomb  x   y  = 'H';
+
+//daylight hours
+//-> h(d,latitude bornholm)=5.13*SIN(0.017*d-1.377)+12
+dl:: num -> num;
+dl day = 5.13*sin(0.017*day-1.377)+12;
+
+//derivative of daylight hours - determining time of year
+//-> 0.08721*COS(0.017*d-1.377)
+dldt:: num -> num;
+dldt day = 0.08721*cos(0.017*day-1.377);
+
+
+// SPECIES DEFINITIONS
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+
+//cod (Gadus morhua)	->		#
+//	l		length in [mm]
+//	bm		body mass in [g]
+//	ox		oxygen content [0.1 mg]
+//	jpo		energy content [jule per oxygen - 2.7 J/(0.2 mg oxygen)]
+//	s		sex [0,1] ((female,male))
+//	rc		reproductive cycle [1,2,3,4]	[spent,preperation, wanting to spawn,spawning]	
+//	hs		hunting success in [0,1]			governs behaviour
+//	sta		stock affiliation in ['E','W','H']
+//	p		defines particular physiological performance
+//	v 		records volume in which individual resides
+//	ui		unique identifyer				makes it possible to track individual fish
+GM(num,num,num,num,num,num,num,string,num,num,num)[];
+
+//cod egg package	->		#
+//	ds		developmental stage of the eggs [0..100]
+//	sta		stock affiliation in ['E','W','H']
+GME(num,string);
+
+//cod larvae			->		#
+//	dw		dry weight in [mg]
+//	sta		stock affiliation in ['E','W','H']
+GML(num,string);
+
+//stomach		-> 
+//	pc		consumed prey in [g]
+//	va		variability of food intake level
+//	uis		unique identifyer stomach
+Stc(num,num,num)[];
+
+//liver			->		#
+//	as		Anisakis simplex		[0,1,2,3]
+//	co		Contracaecum osculatum		[0,1,2,3]
+//	uil		uniique identifyer liver [#]
+Liver(num,num,num);
+
+//gonads		->		#
+//	s		sex ['m','f'][0,1]
+//	n		number [#]
+//	mat		maturity [0,1,2,3,4,5,6,7]
+//	JPO		[counter for energy allocated to gonadel development]
+//	gw		gonad weight [g]
+//	uig		unique identifier gonads
+Gon(num,num,num,num,num,num);
+
+//food pieces			-> in [0.013 g] 
+//	od		oxygen demand in [O]
+//	t		energy transfer in [JPO]
+//	f		digestive factor 				scales the rate of digestion for type
+AJPO(num,num,num);
+
+//prey			->		#
+//	pn		'name'
+//	s		size in [0.013g] 
+//	pod		prey type oxygen consumption 			the 'prey type' attributes are passed on to the respective food pieces
+//	pet		prey type energy gain 
+//	pdf		prey type digestive factor
+//	ast		Anisakis simplex transfer		[0,1]
+//	cot		Contracaecum osculatum	transfer	[0,1]
+Prey(string,num,num,num,num,num,num);
+
+//environment boxes	->		#
+//	bn		'name' [1-12]
+//	t		temperature in °C
+//	o		oxygen saturation in %
+//	sal		salinity [???]
+//	day		photoperiod [dl function]
+//	z		zone[shore -> 1, slope -> 2, trench -> 3, pelagic -> 4, basin slope -> 5, basin deep -> 6]
+//	sub		substrate [mud -> 1, sand -> 2, coarse -> 3, mixed ->, rock -> 4]
+//	pa		prey availability [0-10]
+//	ar		area
+//	mind		min. depth
+//	mand		max. depth
+Box(num,num,num,num,num,num,num,num,num,num,num)[];
+
+ACT();
+HUNT();
+EAT();
+MATE();
+   
+group:   GM(442,715,30,150,0,1,0,'E',0,13,1001)[Stc(0,1,1001)[] + Liver(0,0,1001) + Gon(0,0,0,0,0,1001)]
+       + GM(442,715,30,150,1,1,0,'E',0,13,1002)[Stc(0,1,1002)[] + Liver(0,0,1002) + Gon(1,0,0,0,0,1002)];
+
+
+// INITIAL SOLUTION
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+>>INIT[	Box(1,10,100,10,0,1,5,0,100,0,30)[]+
+	Box(2,10,100,10,0,1,5,0,100,0,30)[]+
+	Box(3,10,100,10,0,1,5,0,100,0,30)[]+
+	Box(4,10,100,10,0,1,5,0,100,0,30)[]+
+	Box(5,10,100,10,0,1,5,0,100,0,30)[]+
+	Box(6,10,100,10,0,1,5,0,100,0,30)[]+
+
+	Box(13,10,100,10,0,3,5,0,100,30,50)[group
+						]+
+	Box(14,10,100,10,0,3,5,0,100,30,50)[]+
+	Box(15,10,100,10,0,3,5,0,100,30,50)[]+
+	Box(16,10,100,10,0,3,5,0,100,30,50)[]+
+	Box(17,10,100,10,0,3,5,0,100,30,50)[]+
+	Box(18,10,100,10,0,3,5,0,100,30,50)[]+
+
+	Box(25,10,100,10,0,3,5,0,100,50,94)[]+
+	  
+	Box(26,10,100,10,0,3,5,0,100,50,94)[]+
+	Box(27,10,100,10,0,3,5,0,100,50,94)[]+
+	Box(28,10,100,10,0,3,5,0,100,50,94)[]+
+	Box(29,10,100,10,0,3,5,0,100,50,94)[]+
+	Box(30,10,100,10,0,3,5,0,100,50,94)[]+
+
+	Box(37,10,100,10,0,1,5,0,100,0,30)[]+
+	Box(38,10,100,10,0,1,5,0,100,0,30)[]+
+	Box(39,10,100,10,0,1,5,0,100,0,30)[]+
+	Box(40,10,100,10,0,1,5,0,100,0,30)[]+
+	Box(41,10,100,10,0,1,5,0,100,0,30)[]+
+	Box(42,10,100,10,0,1,5,0,100,0,30)[]
+];
+
+
+
+// RULE SCHEMATA
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+//METABOLISM
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+//Oxygen Intake
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox  ,ec,s,sm,hs,sta,p,v,ui)[gm?] + box?] ->
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox+1,ec,s,sm,hs,sta,p,v,ui)[gm?] + box?]
+@ if (ox < 30)
+then amr(o,t) * lbmf(bm) else 0;
+
+
+//Standard metabolic rate
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox  ,jpo  ,s,sm,hs,sta,p,v,ui)[Liver(as,co,uil) + gm?] + box?] ->
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox-1,jpo-1,s,sm,hs,sta,p,v,ui)[Liver(as,co,uil) + gm?] + box?]
+@ if (ox>0) && (jpo > 0.3*bm)
+then (smr(t) - dsmr(co)) * lbmf(bm) else 0;
+
+
+//Starvation
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm   ,ox  ,jpo  ,s,sm,hs,sta,p,v,ui)[Liver(as,co,uil) + gm?] + box?] ->
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm-si,ox-1,jpo+4,s,sm,hs,sta,p,v,ui)[Liver(as,co,uil) + gm?] + box?]
+@ if (ox>0) && (jpo <= 0.3*bm)
+then (smr(t) - dsmr(co)) * lbmf(bm) else 0;
+
+
+//Normal Growth
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,       bm   ,ox  ,jpo   ,s,sm,hs,sta,p,v,ui)[gm?] + box?] ->
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l+lg(bm),bm+gi,ox-4,jpo-12,s,sm,hs,sta,p,v,ui)[gm?] + box?]
+@ if ((ox > 27) && (jpo > 10*bm) && (cf(l,bm) > lgt))
+then td(t,bm) * ebmf(bm) else 0;
+
+
+//Growth at low CI
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm   ,ox  ,jpo   ,s,sm,hs,sta,p,v,ui)[gm?] + box?] ->
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm+gi,ox-4,jpo-12,s,sm,hs,sta,p,v,ui)[gm?] + box?]
+@ if ((ox > 28) && (jpo > 10*bm) && (cf(l,bm) <= mgt))
+then td(t,bm) * ebmf(bm) else 0;
+
+
+//G01 Gonad energy allocation
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox  ,jpo   ,s,rc,hs,sta,p,v,ui)[Gon(s,n,mog,ec   ,gw   ,uig) + gm?] + box?] ->
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox-4,jpo-12,s,rc,hs,sta,p,v,ui)[Gon(s,n,mog,ec+gi,gw+gi,uig) + gm?] + box?] 
+@ if ((rc==2) && (ox > 27) && (jpo > 10*bm))
+then td(t,bm) * ebmf(bm) else 0;
+
+
+//G02 Gonad growth f
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[Gon(s,n,mog  ,ec,gw,uig) + gm?] + box?] ->
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[Gon(s,n,mog+1,0 ,gw,uig) + gm?] + box?] 
+@ if ((mog<8) && (s==0) && (0.08*0.15*bm<ec)) //function combining 8 steps and 8% of body weight for complete gonads
+then 1 else 0;
+
+//G02 Gonad growth m
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[Gon(s,n,mog  ,ec,gw,uig) + gm?] + box?] ->
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[Gon(s,n,mog+1,0 ,gw,uig) + gm?] + box?] 
+@ if ((mog<8) && (s==1) && (0.05*0.15*bm<ec)) //function combining 8 steps and 5% of body weight for complete gonads
+then 1 else 0;
+
+
+//Stomach Evacuation
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox   ,jpo   ,s,sm,hs,sta,p,v,ui)[Stc(pc,va,uis)[AJPO(od,et,df) + sc?] + gm?] + box?] ->
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox-od,jpo+et,s,sm,hs,sta,p,v,ui)[Stc(pc,va,uis)[                 sc?] + gm?] + box?]
+@ if ((ox > 25) && (jpo < 150*bm))
+then 0.05 * td(t,bm) * ebmf(bm) * count(sc?,'AJPO') * df else 0;
+
+
+//Ingestion
+Box(bn,t,o,sal,d,z,su,pa  ,ar,mind,mand)[
+GM(l,bm,ox,jpo,s,sm,1                                  ,sta,p,v,ui)[Stc(pc           ,va,uis)[                         sc?] + Liver(as,co         ,uil) + gm?] + Prey(pn,ps,pod,pet,pdf,ast,cot):np + box?] ->
+Box(bn,t,o,sal,d,z,su,pa-1,ar,mind,mand)[
+GM(l,bm,ox,jpo,s,sm,fil(count(sc?,'AJPO'),co,va,bm,o,t),sta,p,v,ui)[Stc(pc+(ps*0.013),va,uis)[(ps) AJPO(pod,pet,pdf) + sc?] + Liver(as,spi(co,cot),uil)  + gm?] + box?]
++ EAT
+@ if (jpo < 50*bm) && ((ps+count(sc?,'AJPO') < (msv(bm)*oda(o)*td(t,bm))))
+then 1 else 0;
+
+
+//Hunting with Success
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox,jpo,s,sm,0,sta,p,v,ui)[Stc(pc,va,uis)[sc?] + gm?] + box?] ->
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox,jpo,s,sm,1,sta,p,v,ui)[Stc(pc,va,uis)[sc?] + gm?] + box?]
++ HUNT
+@ if (jpo > 0.05*bm) && (count(sc?,'AJPO') <= 10)
+then 0.00075 else 0; 
+
+
+//Activity
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox  ,jpo  ,s,sm,hs,sta,p,v,ui)[Stc(pc,va,uis)[sc?] + gm?] + box?] ->
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox-4,jpo-2,s,sm,hs,sta,p,v,ui)[Stc(pc,va,uis)[sc?] + gm?] + box?]
++ ACT
+@ if ((ox > 26)&& (jpo > 0.2*bm))
+then (0.016*o-0.52) * 50 * lbmf(bm) else 0;
+
+
+//Death from starvation
+GM(l,bm,ox,jpo,s,sm,hs,sta,p,v,ui)[gm?] ->
+
+@ if (cf(l,bm) < lcft)
+then 1 else 0;
+
+
+//Death from Asphyxiation
+GM(l,bm,ox,jpo,s,sm,hs,sta,p,v,ui)[gm?] ->
+
+@ if (ox < 1)
+then 0.1 else 0;
+
+
+
+// REPRODUCTION											
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+//RC01 spent to preperation
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox,jpo,s,1,hs,bet,p,b,u)[Gon(s,n,mog,ec,gw,uig) + gm?] + box?] ->  //reproductive cycle is at spent aka 1
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox,jpo,s,2,hs,bet,p,b,u)[Gon(s,4,0  ,ec,gw,uig) + gm?] + box?]
+@ if 	(cf(l,bm) > 0.65)	//condition index is high enough
+&&	(dl(d)>10)		//AND daylength higher ten
+&&	(dl(d)<12.5)		//AND daylength lower 
+&&	(dldt(d)>0)		//AND it is the first half of the year
+then 1 else 0;
+
+
+//RC02 preperation to spawn
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox,jpo,s,2,hs,bet,p,b,u)[Gon(s,n,mog,ec,gw,uig) + gm?] + box?] ->  
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox,jpo,s,3,hs,bet,p,b,u)[Gon(s,n,mog,ec,gw,uig) + gm?] + box?] 
+@ if 	(mog==8)		//gonads are mature
+then 1 else 0;
+
+
+//RC03a spawning - mating
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(lf,bmf,oxf,jpof,0,3,hsf,betf,pf,bf,uif)[Gon(sf,nf,mogf,ecf,gwf,uigf) + gmf?] + GM(lm,bmm,oxm,jpom,1,3,hsm,betm,pm,bm,uim)[Gon(sm,nm,mogm,ecm,gwm,uigm) + gmm?] + box?] ->
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(lf,bmf,oxf,jpof,0,4,hsf,betf,pf,bf,uif)[Gon(sf,0 ,0   ,ecf,0  ,uigf) + gmf?] + GM(lm,bmm,oxm,jpom,1,4,hsm,betm,pm,bm,uim)[Gon(sm,0 ,0   ,ecm,0  ,uigm) + gmm?] + nf GME(0,stacomb(betf,betm)) + box?]
++ MATE
+@ if 	(betf==betm) 		//male and female have the same stock affiliation
+&& 	(nm>0)			//the male has gonads
+&& 	(nf>0) 			//the female has gonads
+&& 	(mogm==8) 		//the male gonads are mature
+&& 	(mogf==8)		//the female gonads are mature
+then 1 else 0;   
+
+//RC03b spawning - mating
+Box(bnf,tf,of,salf,df,zf,suf,paf,arf,mindf,mandf)[GM(lf,bmf,oxf,jpof,0,3,hsf,betf,pf,bf,uif)[Gon(sf,nf,mogf,ecf,gwf,uigf) + gmf?] + box?] +
+Box(bnm,tm,om,salm,dm,zm,sum,pam,arm,mindm,mandm)[GM(lm,bmm,oxm,jpom,1,3,hsm,betm,pm,bm,uim)[Gon(sm,nm,mogm,ecm,gwm,uigm) + gmm?] + box?]->
+Box(bnf,tf,of,salf,df,zf,suf,paf,arf,mindf,mandf)[GM(lf,bmf,oxf,jpof,0,4,hsf,betf,pf,bf,uif)[Gon(sf,0 ,0   ,ecf,0  ,uigf) + gmf?] + nf GME(0,stacomb(betf,betm)) + box?] +
+Box(bnm,tm,om,salm,dm,zm,sum,pam,arm,mindm,mandm)[GM(lm,bmm,oxm,jpom,1,4,hsm,betm,pm,bm,uim)[Gon(sm,0 ,0   ,ecm,0  ,uigm) + gmm?] + box?]
++ MATE
+@ if (((bnf==25) ||(bnf==26) ||(bnf==27) ||(bnf==28) ||(bnf==29) ||(bnf==30) ||(bnf==31) ||(bnf==32) ||(bnf==33) ||(bnf==34) ||(bnf==35) ||(bnf==36))
+  && ((bnm==25) ||(bnm==26) ||(bnm==27) ||(bnm==28) ||(bnm==29) ||(bnm==30) ||(bnm==31) ||(bnm==32) ||(bnm==33) ||(bnm==34) ||(bnm==35) ||(bnm==36)))
+&&	(betf==betm) 	//male and female have the same stock affiliation
+&& 	(nm>0)			//the male has gonads
+&& 	(nf>0) 			//the female has gonads
+&& 	(mogm==8) 		//the male gonads are mature
+&& 	(mogf==8)		//the female gonads are mature
+then 1 else 0; 
+
+
+//RC04 spawn to spent
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox,jpo,s,4,hs,bet,p,b,u)[Gon(s,n,mog,ec,gw,uig) + gm?] + box?] ->  
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox,jpo,s,1,hs,bet,p,b,u)[Gon(s,n,mog,ec,gw,uig) + gm?] + box?]
+@ if 	(n==0)			//gonads are empty
+then 1 else 0;
+
+
+
+// Movement	between Boxes			
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+//37::1 {bornholm slope -> bornholm pelagic}  
+Box(bn37,t37,o37,sal37,d37,z37,sub37,pa37,ar37,mind37,mand37)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,v,ui)[gm?] + ths?] + Box(bn1,t1,o1,sal1,d1,z1,sub1,pa1,ar1,mind1,mand1)[one?                                   ]->
+Box(bn37,t37,o37,sal37,d37,z37,sub37,pa37,ar37,mind37,mand37)[ths?                                   ] + Box(bn1,t1,o1,sal1,d1,z1,sub1,pa1,ar1,mind1,mand1)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,bn1,ui)[gm?] + one?]
+@ if (    (((bn37==37) ||(bn37==38) ||(bn37==39) ||(bn37==40) ||(bn37==41) ||(bn37==42) ||(bn37==43) ||(bn37==44) ||(bn37==45) ||(bn37==46) ||(bn37==47) ||(bn37==48))
+	&& ((bn1==1)   ||(bn1==2)   ||(bn1==3)   ||(bn1==4)   ||(bn1==5)   ||(bn1==6)   ||(bn1==7)   ||(bn1==8)   ||(bn1==9)   ||(bn1==10)  ||(bn1==11)  ||(bn1==12)))		//assign functional box-groups
+		&& ((rc==3) 				// transition likely: if sexual cycle at 'wanting to spawn' (3) 
+			|| ((rc==1) && (dl(d1)<7))	// OR sexual cycle at 'spent' (1) AND daylength is shorter than 7 hours
+			|| ((rc==2) && (dl(d1)>7))))
+then 0.00006 else 0;
+
+
+//1::13 {bornholm pelagic -> bornholm basin slope}
+Box(bn1,t1,o1,sal1,d1,z1,sub1,pa1,ar1,mind1,mand1)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,v,ui)[gm?] + one?] + Box(bn13,t13,o13,sal13,d13,z13,sub13,pa13,ar13,mind13,mand13)[thi?                                   ]->
+Box(bn1,t1,o1,sal1,d1,z1,sub1,pa1,ar1,mind1,mand1)[one?                                   ] + Box(bn13,t13,o13,sal13,d13,z13,sub13,pa13,ar13,mind13,mand13)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,bn13,ui)[gm?] + thi?]
+@ if (    (((bn1==1)   ||(bn1==2)   ||(bn1==3)   ||(bn1==4)   ||(bn1==5)   ||(bn1==6)   ||(bn1==7)   ||(bn1==8)   ||(bn1==9)   ||(bn1==10)  ||(bn1==11)  ||(bn1==12))
+	&& ((bn13==13) ||(bn13==14) ||(bn13==15) ||(bn13==16) ||(bn13==17) ||(bn13==18) ||(bn13==19) ||(bn13==20) ||(bn13==21) ||(bn13==22) ||(bn13==23) ||(bn13==24)))		//assign functional box-groups
+		&& ((rc==3) 				// transition likely: if sexual cycle at 'wanting to spawn' (3) 
+			|| ((rc==1) && (dl(d1)<7))	// OR sexual cycle at 'spent' (1) AND daylength is shorter than 7 hours
+			|| ((rc==2) && (dl(d1)>7))))
+then 0.00006 else 0;
+
+
+//13::25 {bornholm basin -> basin deep}
+Box(bn13,t13,o13,sal13,d13,z13,sub13,pa13,ar13,mind13,mand13)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,v,ui)[gm?] + thi?] + Box(bn25,t25,o25,sal25,d25,z25,sub25,pa25,ar25,mind25,mand25)[twf?                                   ]->
+Box(bn13,t13,o13,sal13,d13,z13,sub13,pa13,ar13,mind13,mand13)[thi?                                   ] + Box(bn25,t25,o25,sal25,d25,z25,sub25,pa25,ar25,mind25,mand25)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,bn25,ui)[gm?] + twf?]
+@ if (    (((bn13==13) ||(bn13==14) ||(bn13==15) ||(bn13==16) ||(bn13==17) ||(bn13==18) ||(bn13==19) ||(bn13==20) ||(bn13==21) ||(bn13==22) ||(bn13==23) ||(bn13==24)) 
+	&& ((bn25==25) ||(bn25==26) ||(bn25==27) ||(bn25==28) ||(bn25==29) ||(bn25==30) ||(bn25==31) ||(bn25==32) ||(bn25==33) ||(bn25==34) ||(bn25==35) ||(bn25==36)))		//assign functional box-groups
+		&& (rc==3))		//transition likely: if sexual cycle at 'wanting to spawn' (3)
+then 0.00006 else 0;
+
+
+//25::13 {basin deep -> basin slope}
+Box(bn25,t25,o25,sal25,d25,z25,sub25,pa25,ar25,mind25,mand25)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,v,ui)[gm?] + twf?] + Box(bn13,t13,o13,sal13,d13,z13,sub13,pa13,ar13,mind13,mand13)[thi?                                   ]->
+Box(bn25,t25,o25,sal25,d25,z25,sub25,pa25,ar25,mind25,mand25)[twf?                                   ] + Box(bn13,t13,o13,sal13,d13,z13,sub13,pa13,ar13,mind13,mand13)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,bn13,ui)[gm?] + thi?]
+@ if (    (((bn13==13) ||(bn13==14) ||(bn13==15) ||(bn13==16) ||(bn13==17) ||(bn13==18) ||(bn13==19) ||(bn13==20) ||(bn13==21) ||(bn13==22) ||(bn13==23) ||(bn13==24)) 
+	&& ((bn25==25) ||(bn25==26) ||(bn25==27) ||(bn25==28) ||(bn25==29) ||(bn25==30) ||(bn25==31) ||(bn25==32) ||(bn25==33) ||(bn25==34) ||(bn25==35) ||(bn25==36)))		//assign functional box-groups
+		&& (rc==1))		//transition likely: if sexual cycle at 'spent' (1)
+then 0.00006 else 0;
+
+
+//13::1 {bornholm basin -> bornholm pelagic}
+Box(bn13,t13,o13,sal13,d13,z13,sub13,pa13,ar13,mind13,mand13)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,v,ui)[gm?] + thi?] + Box(bn1,t1,o1,sal1,d1,z1,sub1,pa1,ar1,mind1,mand1)[one?                                   ] ->
+Box(bn13,t13,o13,sal13,d13,z13,sub13,pa13,ar13,mind13,mand13)[thi?                                   ] + Box(bn1,t1,o1,sal1,d1,z1,sub1,pa1,ar1,mind1,mand1)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,bn1,ui)[gm?] + one?] 
+@ if (    (((bn13==13) ||(bn13==14) ||(bn13==15) ||(bn13==16) ||(bn13==17) ||(bn13==18) ||(bn13==19) ||(bn13==20) ||(bn13==21) ||(bn13==22) ||(bn13==23) ||(bn13==24)) 
+	&& ((bn1==1)   ||(bn1==2)   ||(bn1==3)   ||(bn1==4)   ||(bn1==5)   ||(bn1==6)   ||(bn1==7)   ||(bn1==8)   ||(bn1==9)   ||(bn1==10)  ||(bn1==11)  ||(bn1==12)))		//assign functional box-groups
+		&& (((rc==2) && (dl(d1)>10)) 			//transition likely: if sexual cycle at 'preparing' (2) AND daylength longer 10 hours 
+			||  ((rc==1) && (dl(d1)>8.13))		//OR: sexual cycle at 'spent' (1) AND daylength is longer 8.13 hours
+			||  ((rc==3) && (dl(d1)<8.13))))
+then 0.00006 else 0;
+
+
+//1::37 {bornholm pelagic -> bornholm slope}
+Box(bn1,t1,o1,sal1,d1,z1,sub1,pa1,ar1,mind1,mand1)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,v,ui)[gm?] + one?] + Box(bn37,t37,o37,sal37,d37,z37,sub37,pa37,ar37,mind37,mand37)[ths?                                   ] ->
+Box(bn1,t1,o1,sal1,d1,z1,sub1,pa1,ar1,mind1,mand1)[one?                                   ] + Box(bn37,t37,o37,sal37,d37,z37,sub37,pa37,ar37,mind37,mand37)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,bn37,ui)[gm?] + ths?]
+@ if (    (((bn1==1)   ||(bn1==2)   ||(bn1==3)   ||(bn1==4)   ||(bn1==5)   ||(bn1==6)   ||(bn1==7)   ||(bn1==8)   ||(bn1==9)   ||(bn1==10)  ||(bn1==11)  ||(bn1==12)) 
+	&& ((bn37==37) ||(bn37==38) ||(bn37==39) ||(bn37==40) ||(bn37==41) ||(bn37==42) ||(bn37==43) ||(bn37==44) ||(bn37==45) ||(bn37==46) ||(bn37==47) ||(bn37==48)))		//assign functional box-groups
+		&& (((rc==2) && (dl(d1)>10)) 			//transition likely: if sexual cycle at 'preparing' (2) AND daylength longer 10 hours 
+			||  ((rc==1) && (dl(d1)>8.13))		//OR: sexual cycle at 'spent' (1) AND daylength is longer 8.13 hours
+			||  ((rc==3) && (dl(d1)<8.13))))
+then 0.00006 else 0;
+
+
+
+// Movement between Fragments				
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+//1i::1ii {bornholm pelagic} -> bornholm pelagic}}
+Box(bn1i,t1i,o1i,sal1i,d1i,z1i,sub1i,pa1i,ar1i,mind1i,mand1i)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,v,ui)[gm?] + thi?] + Box(bn1ii,t1ii,o1ii,sal1ii,d1ii,z1ii,sub1ii,pa1ii,ar1ii,mind1ii,mand1ii)[twf?                                   ]->
+Box(bn1i,t1i,o1i,sal1i,d1i,z1i,sub1i,pa1i,ar1i,mind1i,mand1i)[thi?                                   ] + Box(bn1ii,t1ii,o1ii,sal1ii,d1ii,z1ii,sub1ii,pa1ii,ar1ii,mind1ii,mand1ii)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,bn1ii,ui)[gm?] + twf?]
+@ if ((((bn1i==1) || (bn1i==2) ||(bn1i==3) ||(bn1i==4) ||(bn1i==5) ||(bn1i==6) ||(bn1i==7) ||(bn1i==8) ||(bn1i==9) ||(bn1i==10) ||(bn1i==11) ||(bn1i==12))
+&& ((bn1ii==1) || (bn1ii==2) ||(bn1ii==3) ||(bn1ii==4) ||(bn1ii==5) ||(bn1ii==6) ||(bn1ii==7) ||(bn1ii==8) ||(bn1ii==9) ||(bn1ii==10) ||(bn1ii==11) ||(bn1ii==12))))		//if same functional box
+then 1/8400 else 0;
+
+//13i::13ii {bornholm basin -> bornholm basin}
+Box(bn13i,t13i,o13i,sal13i,d13i,z13i,sub13i,pa13i,ar13i,mind13i,mand13i)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,v,ui)[gm?] + thi?] + Box(bn13ii,t13ii,o13ii,sal13ii,d13ii,z13ii,sub13ii,pa13ii,ar13ii,mind13ii,mand13ii)[twf?                                   ]->
+Box(bn13i,t13i,o13i,sal13i,d13i,z13i,sub13i,pa13i,ar13i,mind13i,mand13i)[thi?                                   ] + Box(bn13ii,t13ii,o13ii,sal13ii,d13ii,z13ii,sub13ii,pa13ii,ar13ii,mind13ii,mand13ii)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,bn13ii,ui)[gm?] + twf?]
+@ if ((((bn13i==13) || (bn13i==14) || (bn13i==15) || (bn13i==16) || (bn13i==17) || (bn13i==18) || (bn13i==19) || (bn13i==20) || (bn13i==21) || (bn13i==22) || (bn13i==23) || (bn13i==24)) 
+&& ((bn13ii==13) || (bn13ii==14) || (bn13ii==15) || (bn13ii==16) || (bn13ii==17) || (bn13ii==18) || (bn13ii==19) || (bn13ii==20) || (bn13ii==21) || (bn13ii==22) || (bn13ii==23) || (bn13ii==24))))		//if same functional box
+then 1/8400 else 0;
+
+//25i::25ii {basin deep -> basin deep}
+Box(bn25i,t25i,o25i,sal25i,d25i,z25i,sub25i,pa25i,ar25i,mind25i,mand25i)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,v,ui)[gm?] + thi?] + Box(bn25ii,t25ii,o25ii,sal25ii,d25ii,z25ii,sub25ii,pa25ii,ar25ii,mind25ii,mand25ii)[twf?                                   ]->
+Box(bn25i,t25i,o25i,sal25i,d25i,z25i,sub25i,pa25i,ar25i,mind25i,mand25i)[thi?                                   ] + Box(bn25ii,t25ii,o25ii,sal25ii,d25ii,z25ii,sub25ii,pa25ii,ar25ii,mind25ii,mand25ii)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,bn25ii,ui)[gm?] + twf?]
+@ if ((((bn25i==25) || (bn25i==26) || (bn25i==27) || (bn25i==28) || (bn25i==29) || (bn25i==30) || (bn25i==31) || (bn25i==32) || (bn25i==33) || (bn25i==34) || (bn25i==35) || (bn25i==36))
+&& ((bn25ii==25) || (bn25ii==26) || (bn25ii==27) || (bn25ii==28) || (bn25ii==29) || (bn25ii==30) || (bn25ii==31) || (bn25ii==32) || (bn25ii==33) || (bn25ii==34) || (bn25ii==35) || (bn25ii==36))))		//if same functional box
+then 1/8400 else 0;
+
+//37i::37ii {bornholm slope} -> bornholm slope}}
+Box(bn37i,t37i,o37i,sal37i,d37i,z37i,sub37i,pa37i,ar37i,mind37i,mand37i)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,v,ui)[gm?] + thi?] + Box(bn37ii,t37ii,o37ii,sal37ii,d37ii,z37ii,sub37ii,pa37ii,ar37ii,mind37ii,mand37ii)[twf?                                   ]->
+Box(bn37i,t37i,o37i,sal37i,d37i,z37i,sub37i,pa37i,ar37i,mind37i,mand37i)[thi?                                   ] + Box(bn37ii,t37ii,o37ii,sal37ii,d37ii,z37ii,sub37ii,pa37ii,ar37ii,mind37ii,mand37ii)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,bn37ii,ui)[gm?] + twf?]
+@ if ((((bn37i==37) || (bn37i==38) || (bn37i==39) || (bn37i==40) || (bn37i==41) || (bn37i==42) || (bn37i==43) || (bn37i==44) || (bn37i==45) || (bn37i==46) || (bn37i==47) || (bn37i==48))
+&& ((bn37ii==37) || (bn37ii==38) || (bn37ii==39) || (bn37ii==40) || (bn37ii==41) || (bn37ii==42) || (bn37ii==43) || (bn37ii==44) || (bn37ii==45) || (bn37ii==46) || (bn37ii==47) || (bn37ii==48))))		//if same functional box
+then 1/8400 else 0;
+
+
+
+// DAY						
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+Box(1,t1,o1,sal1,d1,z1,substr1,pa1,ar1,mind1,max1)[r1?]+
+Box(2,t2,o2,sal2,d2,z2,substr2,pa2,ar2,mind2,max2)[r2?]+
+Box(3,t3,o3,sal3,d3,z3,substr3,pa3,ar3,mind3,max3)[r3?]+
+Box(4,t4,o4,sal4,d4,z4,substr4,pa4,ar4,mind4,max4)[r4?]+
+Box(5,t5,o5,sal5,d5,z5,substr5,pa5,ar5,mind5,max5)[r5?]+
+Box(6,t6,o6,sal6,d6,z6,substr6,pa6,ar6,mind6,max6)[r6?]+
+Box(13,t13,o13,sal13,d13,z13,substr13,pa13,ar13,mind13,max13)[r13?]+
+Box(14,t14,o14,sal14,d14,z14,substr14,pa14,ar14,mind14,max14)[r14?]+
+Box(15,t15,o15,sal15,d15,z15,substr15,pa15,ar15,mind15,max15)[r15?]+
+Box(16,t16,o16,sal16,d16,z16,substr16,pa16,ar16,mind16,max16)[r16?]+
+Box(17,t17,o17,sal17,d17,z17,substr17,pa17,ar17,mind17,max17)[r17?]+
+Box(18,t18,o18,sal18,d18,z18,substr18,pa18,ar18,mind18,max18)[r18?]+
+Box(25,t25,o25,sal25,d25,z25,substr25,pa25,ar25,mind25,max25)[r25?]+
+Box(26,t26,o26,sal26,d26,z26,substr26,pa26,ar26,mind26,max26)[r26?]+
+Box(27,t27,o27,sal27,d27,z27,substr27,pa27,ar27,mind27,max27)[r27?]+
+Box(28,t28,o28,sal28,d28,z28,substr28,pa28,ar28,mind28,max28)[r28?]+
+Box(29,t29,o29,sal29,d29,z29,substr29,pa29,ar29,mind29,max29)[r29?]+
+Box(30,t30,o30,sal30,d30,z30,substr30,pa30,ar30,mind30,max30)[r30?]+
+Box(37,t37,o37,sal37,d37,z37,substr37,pa37,ar37,mind37,max37)[r37?]+
+Box(38,t38,o38,sal38,d38,z38,substr38,pa38,ar38,mind38,max38)[r38?]+
+Box(39,t39,o39,sal39,d39,z39,substr39,pa39,ar39,mind39,max39)[r39?]+
+Box(40,t40,o40,sal40,d40,z40,substr40,pa40,ar40,mind40,max40)[r40?]+
+Box(41,t41,o41,sal41,d41,z41,substr41,pa41,ar41,mind41,max41)[r41?]+
+Box(42,t42,o42,sal42,d42,z42,substr42,pa42,ar42,mind42,max42)[r42?]->
+
+Box(1,t1,o1,sal1,d1+1,z1,substr1,pa1,ar1,mind1,max1)[r1?]+
+Box(2,t2,o2,sal2,d2+1,z2,substr2,pa2,ar2,mind2,max2)[r2?]+
+Box(3,t3,o3,sal3,d3+1,z3,substr3,pa3,ar3,mind3,max3)[r3?]+
+Box(4,t4,o4,sal4,d4+1,z4,substr4,pa4,ar4,mind4,max4)[r4?]+
+Box(5,t5,o5,sal5,d5+1,z5,substr5,pa5,ar5,mind5,max5)[r5?]+
+Box(6,t6,o6,sal6,d6+1,z6,substr6,pa6,ar6,mind6,max6)[r6?]+
+Box(13,t13,o13,sal13,d13+1,z13,substr13,pa13,ar13,mind13,max13)[r13?]+
+Box(14,t14,o14,sal14,d14+1,z14,substr14,pa14,ar14,mind14,max14)[r14?]+
+Box(15,t15,o15,sal15,d15+1,z15,substr15,pa15,ar15,mind15,max15)[r15?]+
+Box(16,t16,o16,sal16,d16+1,z16,substr16,pa16,ar16,mind16,max16)[r16?]+
+Box(17,t17,o17,sal17,d17+1,z17,substr17,pa17,ar17,mind17,max17)[r17?]+
+Box(18,t18,o18,sal18,d18+1,z18,substr18,pa18,ar18,mind18,max18)[r18?]+
+Box(25,t25,o25,sal25,d25+1,z25,substr25,pa25,ar25,mind25,max25)[r25?]+
+Box(26,t26,o26,sal26,d26+1,z26,substr26,pa26,ar26,mind26,max26)[r26?]+
+Box(27,t27,o27,sal27,d27+1,z27,substr27,pa27,ar27,mind27,max27)[r27?]+
+Box(28,t28,o28,sal28,d28+1,z28,substr28,pa28,ar28,mind28,max28)[r28?]+
+Box(29,t29,o29,sal29,d29+1,z29,substr29,pa29,ar29,mind29,max29)[r29?]+
+Box(30,t30,o30,sal30,d30+1,z30,substr30,pa30,ar30,mind30,max30)[r30?]+
+Box(37,t37,o37,sal37,d37+1,z37,substr37,pa37,ar37,mind37,max37)[r37?]+
+Box(38,t38,o38,sal38,d38+1,z38,substr38,pa38,ar38,mind38,max38)[r38?]+
+Box(39,t39,o39,sal39,d39+1,z39,substr39,pa39,ar39,mind39,max39)[r39?]+
+Box(40,t40,o40,sal40,d40+1,z40,substr40,pa40,ar40,mind40,max40)[r40?]+
+Box(41,t41,o41,sal41,d41+1,z41,substr41,pa41,ar41,mind41,max41)[r41?]+
+Box(42,t42,o42,sal42,d42+1,z42,substr42,pa42,ar42,mind42,max42)[r42?]
+
+@EACH2400;
+
+
+
+// PREY						
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+//P01 - 01 replenish prey - Bornholm Pelagic
+Box(bn,t,o,sal,d,z,subs,pa     ,ar,mind,mand)[box?] ->
+Box(bn,t,o,sal,d,z,subs,pa+2317,ar,mind,mand)[box? 
++ 1743 Prey ('ringworm'   ,toInt(unif(1,2))      ,6,17,1   , 0 ,0)
++ 2    Prey ('crab'       ,toInt(unif(30,300))  ,6,17,1.23, 0 ,0)
++ 22   Prey ('herring'    ,toInt(unif(115,300)) ,8,24,1.13, 0 ,paraass(lop))
++ 253  Prey ('crangon'    ,toInt(unif(38,300))   ,6,17,1   , 0 ,paraass(lop))
++ 1    Prey ('cod'        ,toInt(unif(115,300)) ,5,14,1.45, 0 ,paraass(lop))
++ 23   Prey ('goby'       ,toInt(unif(115,300)) ,5,14,1.45, 0 ,paraass(lop))
++ 114  Prey ('mollusc'    ,toInt(unif(15,54))    ,6,17,1.23, 0 ,0)
++ 93   Prey ('peracarida' ,toInt(unif(38,300))   ,6,17,1   , 0 ,0)
++ 14   Prey ('flatfish'   ,toInt(unif(115,300)) ,5,14,1.45, 0 ,paraass(lop))
++ 7    Prey ('isopod'     ,toInt(unif(15,300))   ,6,17,1   , 0 ,paraass(lop))
++ 45   Prey ('sprat'      ,toInt(unif(115,300)) ,8,24,1.13, 0 ,paraass(lop))
+]
+@ if ((bn==1)|| (bn==2) ||(bn==3) ||(bn==4) ||(bn==5) || (bn==6)) && (count(box?,'Prey') <= 1) 
+then 1 else 0;
+
+
+//P01 - 13 replenish prey - Bornholm Basin Slope
+Box(bn,t,o,sal,d,z,subs,pa    ,ar,mind,mand)[box?] ->
+Box(bn,t,o,sal,d,z,subs,pa+725,ar,mind,mand)[box? 
++ 436 Prey ('ringworm'  ,toInt(unif(1,2))     ,6,17,1   ,0,0)
++ 17  Prey ('herring'   ,toInt(unif(115,300)),8,24,1.13,0,paraass(lop))
++ 13  Prey ('crangon'   ,toInt(unif(38,300))  ,6,17,1   ,0,paraass(lop))
++ 2   Prey ('cod'       ,toInt(unif(115,300)),5,14,1.45,0,paraass(lop))
++ 76  Prey ('mollusc'   ,toInt(unif(15,54))   ,6,17,1.23,0,0)
++ 140 Prey ('peracarida',toInt(unif(38,300))  ,6,17,1   ,0,0)
++ 2   Prey ('flatfish'  ,toInt(unif(115,300)),5,14,1.45,0,paraass(lop))
++ 2   Prey ('isopod'    ,toInt(unif(15,300))  ,6,17,1   ,0,paraass(lop))
++ 37  Prey ('sprat'     ,toInt(unif(115,300)),8,24,1.13,0,paraass(lop))
+]
+@ if ((bn==13) || (bn==14) || (bn==15) || (bn==16) || (bn==17) || (bn==18)) && (count(box?,'Prey') <= 1) 
+then 1 else 0;
+
+
+//P01 - 25 replenish prey - Bornholm Basin Deep
+Box(bn,t,o,sal,d,z,subs,pa    ,ar,mind,mand)[box?] ->
+Box(bn,t,o,sal,d,z,subs,pa+193,ar,mind,mand)[box?  
++ 13  Prey ('herring'   ,toInt(unif(115,300)),8,24,1.13,0,paraass(lop))
++ 7   Prey ('crangon'   ,toInt(unif(38,300))  ,6,17,1   ,0,paraass(lop))
++ 1   Prey ('cod'       ,toInt(unif(115,300)),5,14,1.45,0,paraass(lop))
++ 114 Prey ('mollusc'   ,toInt(unif(15,54))   ,6,17,1.23,0,0)
++ 23  Prey ('peracarida',toInt(unif(38,300))  ,6,17,1   ,0,0)
++ 6   Prey ('flatfish'  ,toInt(unif(115,300)),5,14,1.45,0,paraass(lop))
++ 29  Prey ('sprat'     ,toInt(unif(115,300)),8,24,1.13,0,paraass(lop))
+]
+@ if ((bn==25)||(bn==26)||(bn==27)||(bn==28)||(bn==29)||(bn==30)) && (count(box?,'Prey') <= 1) 
+then 1 else 0;
+
+
+//P01 - 37 replenish prey - Bornholm slope
+Box(bn,t,o,sal,d,z,subs,pa     ,ar,mind,mand)[box?] ->
+Box(bn,t,o,sal,d,z,subs,pa+2317,ar,mind,mand)[box? 
++ 1743 Prey ('ringworm'  ,toInt(unif(1,2))     ,6,17,1   ,0,0)
++ 2    Prey ('crab'      ,toInt(unif(30,300)) ,6,17,1.23,0,0)
++ 22   Prey ('herring'   ,toInt(unif(115,300)),8,24,1.13,0,paraass(lop))
++ 253  Prey ('crangon'   ,toInt(unif(38,300))  ,6,17,1   ,0,paraass(lop))
++ 1    Prey ('cod'       ,toInt(unif(115,300)),5,14,1.45,0,paraass(lop))
++ 23   Prey ('goby'      ,toInt(unif(115,300)),5,14,1.45,0,paraass(lop))
++ 114  Prey ('mollusc'   ,toInt(unif(15,54))   ,6,17,1.23,0,0)
++ 93   Prey ('peracarida',toInt(unif(38,300))  ,6,17,1   ,0,0)
++ 14   Prey ('flatfish'  ,toInt(unif(115,300)),5,14,1.45,0,paraass(lop))
++ 7    Prey ('isopod'    ,toInt(unif(15,300))  ,6,17,1   ,0,paraass(lop))
++ 45   Prey ('sprat'     ,toInt(unif(115,300)),8,24,1.13,0,paraass(lop))
+]
+@ if ((bn==37)||(bn==38)||(bn==39)||(bn==40)||(bn==41)||(bn==42)) && (count(box?,'Prey') <= 1) 
+then 1 else 0;
+
+
+
+// HABITAT					
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+
+Box(1,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(1,6,72,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(1);//Januar
+Box(1,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(1,4,74,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(73000);//Februar
+Box(1,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(1,3,75,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(146000);//März
+Box(1,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(1,4,75,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(219000);//April
+Box(1,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(1,5,73,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(292000);//Mai
+Box(1,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(1,8,70,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(365000);//Juni
+Box(1,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(1,10,68,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(438000);//Juli
+Box(1,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(1,15,63,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(511000);//August
+Box(1,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(1,18,60,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(584000);//September
+Box(1,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(1,11,67,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(657000);//Oktober
+Box(1,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(1,10,67,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(730000);//November
+Box(1,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(1,8,70,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(803000);//Dezember
+Box(2,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(2,6,62,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(2);//Januar
+Box(2,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(2,4,64,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(72999);//Februar
+Box(2,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(2,3,65,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(145999);//März
+Box(2,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(2,4,65,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(218999);//April
+Box(2,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(2,5,63,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(291999);//Mai
+Box(2,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(2,8,60,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(364999);//Juni
+Box(2,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(2,10,58,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(437999);//Juli
+Box(2,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(2,15,53,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(510999);//August
+Box(2,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(2,18,50,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(583999);//September
+Box(2,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(2,11,57,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(656999);//Oktober
+Box(2,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(2,10,57,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(729999);//November
+Box(2,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(2,8,60,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(802999);//Dezember
+Box(3,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(3,1,72,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(3);//Januar
+Box(3,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(3,-1,74,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(72998);//Februar
+Box(3,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(3,-2,75,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(145998);//März
+Box(3,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(3,-1,75,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(218998);//April
+Box(3,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(3,0,73,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(291998);//Mai
+Box(3,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(3,3,70,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(364998);//Juni
+Box(3,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(3,5,68,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(437998);//Juli
+Box(3,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(3,10,63,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(510998);//August
+Box(3,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(3,13,60,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(583998);//September
+Box(3,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(3,6,67,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(656998);//Oktober
+Box(3,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(3,5,67,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(729998);//November
+Box(3,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(3,3,70,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(802998);//Dezember
+Box(4,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(4,1,82,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(4);//Januar
+Box(4,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(4,-1,84,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(72997);//Februar
+Box(4,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(4,-2,85,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(145997);//März
+Box(4,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(4,-1,85,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(218997);//April
+Box(4,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(4,0,83,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(291997);//Mai
+Box(4,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(4,3,80,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(364997);//Juni
+Box(4,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(4,5,78,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(437997);//Juli
+Box(4,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(4,10,73,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(510997);//August
+Box(4,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(4,13,70,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(583997);//September
+Box(4,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(4,6,77,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(656997);//Oktober
+Box(4,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(4,5,77,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(729997);//November
+Box(4,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(4,3,80,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(802997);//Dezember
+Box(5,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(5,11,72,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(5);//Januar
+Box(5,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(5,9,74,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(72996);//Februar
+Box(5,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(5,8,75,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(145996);//März
+Box(5,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(5,9,75,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(218996);//April
+Box(5,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(5,10,73,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(291996);//Mai
+Box(5,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(5,13,70,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(364996);//Juni
+Box(5,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(5,15,68,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(437996);//Juli
+Box(5,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(5,20,63,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(510996);//August
+Box(5,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(5,23,60,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(583996);//September
+Box(5,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(5,16,67,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(656996);//Oktober
+Box(5,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(5,15,67,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(729996);//November
+Box(5,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(5,13,70,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(802996);//Dezember
+Box(6,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(6,11,62,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(6);//Januar
+Box(6,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(6,9,64,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(72995);//Februar
+Box(6,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(6,8,65,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(145995);//März
+Box(6,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(6,9,65,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(218995);//April
+Box(6,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(6,10,63,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(291995);//Mai
+Box(6,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(6,13,60,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(364995);//Juni
+Box(6,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(6,15,58,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(437995);//Juli
+Box(6,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(6,20,53,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(510995);//August
+Box(6,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(6,23,50,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(583995);//September
+Box(6,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(6,16,57,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(656995);//Oktober
+Box(6,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(6,15,57,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(729995);//November
+Box(6,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(6,13,60,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(802995);//Dezember
+Box(13,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(13,6,68,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(13);//Januar
+Box(13,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(13,5,75,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(72988);//Februar
+Box(13,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(13,5,75,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(145988);//März
+Box(13,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(13,5,73,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(218988);//April
+Box(13,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(13,5,72,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(291988);//Mai
+Box(13,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(13,5,72,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(364988);//Juni
+Box(13,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(13,6,71,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(437988);//Juli
+Box(13,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(13,5,73,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(510988);//August
+Box(13,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(13,5,72,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(583988);//September
+Box(13,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(13,6,70,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(656988);//Oktober
+Box(13,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(13,5,75,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(729988);//November
+Box(13,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(13,7,60,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(802988);//Dezember
+Box(14,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(14,6,58,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(14);//Januar
+Box(14,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(14,5,65,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(72987);//Februar
+Box(14,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(14,5,65,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(145987);//März
+Box(14,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(14,5,63,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(218987);//April
+Box(14,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(14,5,62,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(291987);//Mai
+Box(14,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(14,5,62,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(364987);//Juni
+Box(14,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(14,6,61,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(437987);//Juli
+Box(14,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(14,5,63,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(510987);//August
+Box(14,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(14,5,62,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(583987);//September
+Box(14,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(14,6,60,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(656987);//Oktober
+Box(14,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(14,5,65,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(729987);//November
+Box(14,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(14,7,50,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(802987);//Dezember
+Box(15,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(15,1,68,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(15);//Januar
+Box(15,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(15,0,75,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(72986);//Februar
+Box(15,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(15,0,75,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(145986);//März
+Box(15,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(15,0,73,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(218986);//April
+Box(15,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(15,0,72,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(291986);//Mai
+Box(15,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(15,0,72,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(364986);//Juni
+Box(15,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(15,1,71,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(437986);//Juli
+Box(15,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(15,0,73,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(510986);//August
+Box(15,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(15,0,72,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(583986);//September
+Box(15,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(15,1,70,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(656986);//Oktober
+Box(15,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(15,0,75,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(729986);//November
+Box(15,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(15,2,60,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(802986);//Dezember
+Box(16,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(16,1,78,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(16);//Januar
+Box(16,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(16,0,85,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(72985);//Februar
+Box(16,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(16,0,85,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(145985);//März
+Box(16,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(16,0,83,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(218985);//April
+Box(16,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(16,0,82,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(291985);//Mai
+Box(16,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(16,0,82,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(364985);//Juni
+Box(16,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(16,1,81,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(437985);//Juli
+Box(16,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(16,0,83,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(510985);//August
+Box(16,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(16,0,82,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(583985);//September
+Box(16,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(16,1,80,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(656985);//Oktober
+Box(16,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(16,0,85,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(729985);//November
+Box(16,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(16,2,70,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(802985);//Dezember
+Box(17,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(17,11,68,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(17);//Januar
+Box(17,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(17,10,75,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(72984);//Februar
+Box(17,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(17,10,75,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(145984);//März
+Box(17,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(17,10,73,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(218984);//April
+Box(17,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(17,10,72,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(291984);//Mai
+Box(17,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(17,10,72,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(364984);//Juni
+Box(17,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(17,11,71,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(437984);//Juli
+Box(17,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(17,10,73,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(510984);//August
+Box(17,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(17,10,72,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(583984);//September
+Box(17,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(17,11,70,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(656984);//Oktober
+Box(17,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(17,10,75,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(729984);//November
+Box(17,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(17,12,60,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(802984);//Dezember
+Box(18,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(18,11,58,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(18);//Januar
+Box(18,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(18,10,65,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(72983);//Februar
+Box(18,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(18,10,65,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(145983);//März
+Box(18,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(18,10,63,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(218983);//April
+Box(18,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(18,10,62,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(291983);//Mai
+Box(18,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(18,10,62,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(364983);//Juni
+Box(18,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(18,11,61,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(437983);//Juli
+Box(18,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(18,10,63,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(510983);//August
+Box(18,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(18,10,62,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(583983);//September
+Box(18,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(18,11,60,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(656983);//Oktober
+Box(18,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(18,10,65,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(729983);//November
+Box(18,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(18,12,50,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(802983);//Dezember
+Box(25,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(25,7,75,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(25);//Januar
+Box(25,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(25,7,74,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(72976);//Februar
+Box(25,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(25,7,74,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(145976);//März
+Box(25,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(25,7,70,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(218976);//April
+Box(25,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(25,7,69,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(291976);//Mai
+Box(25,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(25,7,68,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(364976);//Juni
+Box(25,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(25,7,66,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(437976);//Juli
+Box(25,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(25,7,65,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(510976);//August
+Box(25,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(25,7,64,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(583976);//September
+Box(25,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(25,7,65,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(656976);//Oktober
+Box(25,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(25,7,65,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(729976);//November
+Box(25,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(25,7,60,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(802976);//Dezember
+Box(26,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(26,7,65,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(26);//Januar
+Box(26,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(26,7,64,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(72975);//Februar
+Box(26,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(26,7,64,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(145975);//März
+Box(26,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(26,7,60,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(218975);//April
+Box(26,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(26,7,59,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(291975);//Mai
+Box(26,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(26,7,58,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(364975);//Juni
+Box(26,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(26,7,56,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(437975);//Juli
+Box(26,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(26,7,55,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(510975);//August
+Box(26,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(26,7,54,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(583975);//September
+Box(26,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(26,7,55,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(656975);//Oktober
+Box(26,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(26,7,55,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(729975);//November
+Box(26,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(26,7,50,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(802975);//Dezember
+Box(27,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(27,2,75,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(27);//Januar
+Box(27,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(27,2,74,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(72974);//Februar
+Box(27,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(27,2,74,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(145974);//März
+Box(27,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(27,2,70,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(218974);//April
+Box(27,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(27,2,69,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(291974);//Mai
+Box(27,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(27,2,68,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(364974);//Juni
+Box(27,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(27,2,66,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(437974);//Juli
+Box(27,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(27,2,65,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(510974);//August
+Box(27,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(27,2,64,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(583974);//September
+Box(27,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(27,2,65,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(656974);//Oktober
+Box(27,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(27,2,65,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(729974);//November
+Box(27,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(27,2,60,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(802974);//Dezember
+Box(28,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(28,2,85,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(28);//Januar
+Box(28,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(28,2,84,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(72973);//Februar
+Box(28,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(28,2,84,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(145973);//März
+Box(28,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(28,2,80,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(218973);//April
+Box(28,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(28,2,79,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(291973);//Mai
+Box(28,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(28,2,78,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(364973);//Juni
+Box(28,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(28,2,76,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(437973);//Juli
+Box(28,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(28,2,75,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(510973);//August
+Box(28,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(28,2,74,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(583973);//September
+Box(28,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(28,2,75,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(656973);//Oktober
+Box(28,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(28,2,75,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(729973);//November
+Box(28,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(28,2,70,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(802973);//Dezember
+Box(29,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(29,12,75,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(29);//Januar
+Box(29,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(29,12,74,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(72972);//Februar
+Box(29,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(29,12,74,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(145972);//März
+Box(29,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(29,12,70,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(218972);//April
+Box(29,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(29,12,69,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(291972);//Mai
+Box(29,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(29,12,68,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(364972);//Juni
+Box(29,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(29,12,66,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(437972);//Juli
+Box(29,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(29,12,65,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(510972);//August
+Box(29,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(29,12,64,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(583972);//September
+Box(29,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(29,12,65,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(656972);//Oktober
+Box(29,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(29,12,65,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(729972);//November
+Box(29,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(29,12,60,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(802972);//Dezember
+Box(30,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(30,12,65,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(30);//Januar
+Box(30,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(30,12,64,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(72971);//Februar
+Box(30,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(30,12,64,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(145971);//März
+Box(30,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(30,12,60,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(218971);//April
+Box(30,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(30,12,59,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(291971);//Mai
+Box(30,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(30,12,58,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(364971);//Juni
+Box(30,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(30,12,56,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(437971);//Juli
+Box(30,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(30,12,55,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(510971);//August
+Box(30,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(30,12,54,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(583971);//September
+Box(30,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(30,12,55,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(656971);//Oktober
+Box(30,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(30,12,55,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(729971);//November
+Box(30,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(30,12,50,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(802971);//Dezember
+Box(37,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(37,8,64,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(37);//Januar
+Box(37,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(37,7,67,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(72964);//Februar
+Box(37,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(37,5,71,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(145964);//März
+Box(37,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(37,4,75,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(218964);//April
+Box(37,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(37,5,72,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(291964);//Mai
+Box(37,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(37,6,69,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(364964);//Juni
+Box(37,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(37,5,71,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(437964);//Juli
+Box(37,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(37,6,68,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(510964);//August
+Box(37,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(37,7,68,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(583964);//September
+Box(37,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(37,8,63,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(656964);//Oktober
+Box(37,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(37,9,60,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(729964);//November
+Box(37,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(37,9,61,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(802964);//Dezember
+Box(38,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(38,8,54,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(38);//Januar
+Box(38,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(38,7,57,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(72963);//Februar
+Box(38,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(38,5,61,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(145963);//März
+Box(38,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(38,4,65,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(218963);//April
+Box(38,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(38,5,62,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(291963);//Mai
+Box(38,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(38,6,59,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(364963);//Juni
+Box(38,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(38,5,61,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(437963);//Juli
+Box(38,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(38,6,58,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(510963);//August
+Box(38,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(38,7,58,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(583963);//September
+Box(38,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(38,8,53,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(656963);//Oktober
+Box(38,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(38,9,50,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(729963);//November
+Box(38,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(38,9,51,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(802963);//Dezember
+Box(39,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(39,3,64,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(39);//Januar
+Box(39,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(39,2,67,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(72962);//Februar
+Box(39,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(39,0,71,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(145962);//März
+Box(39,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(39,-1,75,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(218962);//April
+Box(39,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(39,0,72,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(291962);//Mai
+Box(39,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(39,1,69,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(364962);//Juni
+Box(39,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(39,0,71,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(437962);//Juli
+Box(39,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(39,1,68,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(510962);//August
+Box(39,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(39,2,68,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(583962);//September
+Box(39,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(39,3,63,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(656962);//Oktober
+Box(39,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(39,4,60,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(729962);//November
+Box(39,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(39,4,61,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(802962);//Dezember
+Box(40,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(40,3,74,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(40);//Januar
+Box(40,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(40,2,77,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(72961);//Februar
+Box(40,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(40,0,81,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(145961);//März
+Box(40,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(40,-1,85,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(218961);//April
+Box(40,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(40,0,82,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(291961);//Mai
+Box(40,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(40,1,79,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(364961);//Juni
+Box(40,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(40,0,81,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(437961);//Juli
+Box(40,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(40,1,78,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(510961);//August
+Box(40,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(40,2,78,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(583961);//September
+Box(40,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(40,3,73,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(656961);//Oktober
+Box(40,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(40,4,70,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(729961);//November
+Box(40,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(40,4,71,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(802961);//Dezember
+Box(41,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(41,13,64,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(41);//Januar
+Box(41,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(41,12,67,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(72960);//Februar
+Box(41,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(41,10,71,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(145960);//März
+Box(41,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(41,9,75,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(218960);//April
+Box(41,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(41,10,72,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(291960);//Mai
+Box(41,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(41,11,69,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(364960);//Juni
+Box(41,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(41,10,71,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(437960);//Juli
+Box(41,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(41,11,68,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(510960);//August
+Box(41,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(41,12,68,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(583960);//September
+Box(41,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(41,13,63,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(656960);//Oktober
+Box(41,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(41,14,60,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(729960);//November
+Box(41,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(41,14,61,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(802960);//Dezember
+Box(42,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(42,13,54,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(42);//Januar
+Box(42,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(42,12,57,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(72959);//Februar
+Box(42,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(42,10,61,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(145959);//März
+Box(42,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(42,9,65,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(218959);//April
+Box(42,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(42,10,62,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(291959);//Mai
+Box(42,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(42,11,59,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(364959);//Juni
+Box(42,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(42,10,61,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(437959);//Juli
+Box(42,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(42,11,58,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(510959);//August
+Box(42,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(42,12,58,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(583959);//September
+Box(42,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(42,13,53,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(656959);//Oktober
+Box(42,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(42,14,50,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(729959);//November
+Box(42,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(42,14,51,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(802959);//Dezember

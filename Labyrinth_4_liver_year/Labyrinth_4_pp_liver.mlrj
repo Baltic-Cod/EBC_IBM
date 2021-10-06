@@ -1,0 +1,616 @@
+//Labyrinth with parasites 4 boxes - parasitation based on ingestion
+//suggested:
+//end time: 873600 intervall: 16800
+
+
+// PARAMETERS
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+
+//Euler's number
+//-> known mathematical constant
+//-> no source needed
+e	:2.71828;
+
+//starvation increment in [g]
+//-> ammount of body mass decrease for standard metabolic rate and a gain of 4 JPO
+//-> energy-mass-balance considerations (based on average energy density of body mass)
+si	:0.0005;
+
+//growth increment in [g]
+//-> ammount of body mass increase exchanged for 12 JPO
+//-> energy-mass-balance considerations
+gi	:0.00587;
+
+//standard body mass factor
+//-> a from W=a*L^b (W in [g], L in [cm] from standard weight in fish)
+//-> from Thuenen Data
+aa	:0.00743;
+
+//standard body mass exponent
+//-> b for W=a*L^b (W in [g], L in [cm] from standard weight in fish)
+//-> from Thuenen Data
+bb	:3.06;
+
+//length growth threshold
+//-> condition factor threshold below which length growth is suspended
+//-> based on DUTIL et al 2000
+lgt	:0.8;
+
+//mass growth threshold
+//-> condition factor threshold above which length growth is suspended
+//-> based on DUTIL et al 2000
+mgt	:1.2;
+
+//lethal condition factor threshold
+//-> condition factor threshold for low-condition-mortality
+//-> based on DUTIL et al 2000
+lcft	:0.6;
+
+//level of parasite infestation
+// -> variable for scanning experiments
+lop	:0;
+
+
+
+//FUNCTIONS		-> 1 hour = 100TU  
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+
+//linear body mass factor
+//-> scales rates linearly for body mass of individual	
+//-> required to reproduce wet-lab equations
+lbmf:: num -> num;
+lbmf bm = (bm/10000);
+
+//acitve metabolic rate
+//-> gives the rate for maximum oxygen intake dependent on oxygen saturation and temperature
+//-> taken from: 	Influence of water temperature and oxygenation on the aerobic metabolic scope of Atlantic cod (Gadus morhua)
+//					Claireaux et al. 2000
+amr:: num -> num -> num;
+amr ox temp = (1-(e)^(0.34-0.035*ox))*(30.01+17.29*(temp)^(1.062-0.015*temp));
+
+//standard metabolic rate
+//-> gives the rate for basal metabolic rate
+//-> taken from: 	Influence of water temperature and oxygenation on the aerobic metabolic scope of Atlantic cod (Gadus morhua)
+//					Claireaux et al. 2000			
+smr:: num -> num;	
+smr temp = (80.1*(1-(e)^(-0.185*(temp)^(0.79))));
+
+//length gain
+//-> calculates the gain in length according to a given gain in mass allometrically
+//-> taken from:	Thünen Data on on growth			 
+lg:: num -> num;
+lg bm = (((bm)/aa)^(1/bb)-((bm-gi)/aa)^(1/bb))*10;
+
+//exponential body mass factor
+//-> scales rates exponentially for body mass of individual
+ebmf:: num -> num;	
+ebmf bm = bm^(1/3);
+
+//temperature dependency
+//-> scales rates for body-mass dependent temperature optimum
+//-> derived from:	Optimal temperature for growth and feed conversion of immature cod (Gadus morhua L.)
+//					Björnsson 2001
+td:: num -> num -> num;
+td temp bm = (-0.007*(temp - (22*(bm)^(-0.1507)))^(2) + 1);
+
+//condition factor
+// calculates the condition factor
+//-> established ratio	
+cf:: num -> num -> num;
+cf l bm = (100000*bm)/((l)^(3));
+
+//maximum stomach volume
+msv:: num -> num;
+msv bm = (bm*70/13);
+
+//oxygen dependent appetite
+oda:: num -> num;
+oda ox = 0.93*(1 - (e)^(-0.03*(ox - 10)));
+
+//food intake level 
+// number AJPO, parasites, variability , body mass, oxygen, temperature
+fil :: num -> num -> num -> num -> num -> num -> num;
+fil xn xpara xv xbm xo xt =  if (xn < (dapl(xpara) * xv * 0.1 * (xbm*70/13) * (0.93*(1-(e)^(-0.03*(xo-10)))) * (-0.007*(xt-(22*(xbm)^(-0.1507)))^(2)+1))) then 1 else 0;
+
+//parasite assignment
+//-> assigns parasites to prey
+//-> source for ratio required
+paraass :: num -> num; 
+paraass 0 = 0;
+paraass 1 = 1;
+paraass r = if (x < r) then 1 else 0 where x = unif(0,1);
+
+//sigmoidal increase of parasites
+// -> experimental function; carrying capacity at 20 total reached after influx of 100 infected fish
+spi :: num -> num -> num;
+spi 0 0 = 0;
+spi 0 1 = 0.14783;
+spi y x = 20/(1+(e)^(-0.1*(((10*log(-y/(y-20))+50)+x)-50)));
+
+//decreased standard metabolic rate through parasite infestation
+dsmr :: num -> num;
+dsmr x = (x*0.635);
+
+//decreased apetite under parasite load
+//decreased digestive tissue available when infested whith Contracaecum osculatum	
+dapl :: num -> num;
+dapl 0 = 1;
+dapl x = 1-(x*0.025);
+
+//sex assignment
+//-> assigns sex to hatched larvae
+//-> source for ratio required
+sexass :: num; 
+sexass = if (x < 0.51) then 0 else 1 where x = unif(0,1);
+
+//stock affiliation combination
+//-> assigns stockk affiliation dependent on stockk affiliation of parents
+stacomb :: string -> string -> string;
+stacomb 'W' 'W' = 'W';
+stacomb 'W' 'E' = 'H';
+stacomb 'E' 'W' = 'H';
+stacomb 'E' 'E' = 'E';
+stacomb  x   y  = 'H';
+
+//daylight hours
+//-> h(d,latitude bornholm)=5.13*SIN(0.017*d-1.377)+12
+dl:: num -> num;
+dl day = 5.13*sin(0.017*day-1.377)+12;
+
+//derivative of daylight hours - determining time of year
+//-> 0.08721*COS(0.017*d-1.377)
+dldt:: num -> num;
+dldt day = 0.08721*cos(0.017*day-1.377);
+
+
+// SPECIES DEFINITIONS
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+
+//cod (Gadus morhua)	->		#
+//	l		length in [mm]
+//	bm		body mass in [g]
+//	ox		oxygen content [0.1 mg]
+//	jpo		energy content [jule per oxygen - 2.7 J/(0.2 mg oxygen)]
+//	s		sex [0,1] ((female,male))
+//	rc		reproductive cycle [1,2,3,4]	[spent,preperation, wanting to spawn,spawning]	
+//	hs		hunting success in [0,1]			governs behaviour
+//	sta		stock affiliation in ['E','W','H']
+//	p		defines particular physiological performance
+//	v 		records volume in which individual resides
+//	ui		unique identifyer				makes it possible to track individual fish
+GM(num,num,num,num,num,num,num,string,num,num,num)[];
+
+//cod egg package	->		#
+//	ds		developmental stage of the eggs [0..100]
+//	sta		stock affiliation in ['E','W','H']
+GME(num,string);
+
+//cod larvae			->		#
+//	dw		dry weight in [mg]
+//	sta		stock affiliation in ['E','W','H']
+GML(num,string);
+
+//stomach		-> 
+//	pc		consumed prey in [g]
+//	va		variability of food intake level
+//	uis		unique identifyer stomach
+Stc(num,num,num)[];
+
+//liver			->		#
+//	as		Anisakis simplex		[0,1,2,3]
+//	co		Contracaecum osculatum		[0,1,2,3]
+//	uil		uniique identifyer liver [#]
+Liver(num,num,num);
+
+//gonads		->		#
+//	s		sex ['m','f'][0,1]
+//	n		number [#]
+//	mat		maturity [0,1,2,3,4,5,6,7]
+//	JPO		[counter for energy allocated to gonadel development]
+//	gw		gonad weight [g]
+//	uig		unique identifier gonads
+Gon(num,num,num,num,num,num);
+
+//food pieces			-> in [0.013 g] 
+//	od		oxygen demand in [O]
+//	t		energy transfer in [JPO]
+//	f		digestive factor 				scales the rate of digestion for type
+AJPO(num,num,num);
+
+//prey			->		#
+//	pn		'name'
+//	s		size in [0.013g] 
+//	pod		prey type oxygen consumption 			the 'prey type' attributes are passed on to the respective food pieces
+//	pet		prey type energy gain 
+//	pdf		prey type digestive factor
+//	ast		Anisakis simplex transfer		[0,1]
+//	cot		Contracaecum osculatum	transfer	[0,1]
+Prey(string,num,num,num,num,num,num);
+
+//environment boxes	->		#
+//	bn		'name' [1-12]
+//	t		temperature in °C
+//	o		oxygen saturation in %
+//	sal		salinity [???]
+//	day		photoperiod [dl function]
+//	z		zone[shore -> 1, slope -> 2, trench -> 3, pelagic -> 4, basin slope -> 5, basin deep -> 6]
+//	sub		substrate [mud -> 1, sand -> 2, coarse -> 3, mixed ->, rock -> 4]
+//	pa		prey availability [0-10]
+//	ar		area
+//	mind		min. depth
+//	mand		max. depth
+Box(num,num,num,num,num,num,num,num,num,num,num)[];
+
+ACT();
+HUNT();
+EAT();
+MATE();
+   
+group:   GM(442,715,30,150,0,1,0,'E',0,13,1001)[Stc(0,1,1001)[] + Liver(0,0,1001) + Gon(0,0,0,0,0,1001)]
+       + GM(442,715,30,150,1,1,0,'E',0,13,1002)[Stc(0,1,1002)[] + Liver(0,0,1002) + Gon(1,0,0,0,0,1002)];
+
+
+// INITIAL SOLUTION
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+>>INIT[Box(1 ,10,100,10,0,1,5,0,100,0 ,30)[
+					]
+     + Box(13,10,100,10,0,3,5,0,100,30,50)[group
+					]
+     + Box(25,10,100,10,0,3,5,0,100,50,94)[
+					]
+     + Box(37,10,100,10,0,1,5,0,100,0 ,30)[
+]];	
+
+
+
+// RULE SCHEMATA
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+//METABOLISM
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+//Oxygen Intake
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox  ,ec,s,sm,hs,sta,p,v,ui)[gm?] + box?] ->
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox+1,ec,s,sm,hs,sta,p,v,ui)[gm?] + box?]
+@ if (ox < 30)
+then amr(o,t) * lbmf(bm) else 0;
+
+
+//Standard metabolic rate
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox  ,jpo  ,s,sm,hs,sta,p,v,ui)[Liver(as,co,uil) + gm?] + box?] ->
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox-1,jpo-1,s,sm,hs,sta,p,v,ui)[Liver(as,co,uil) + gm?] + box?]
+@ if (ox>0) && (jpo > 0.3*bm)
+then (smr(t) - dsmr(co)) * lbmf(bm) else 0;
+
+
+//Starvation
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm   ,ox  ,jpo  ,s,sm,hs,sta,p,v,ui)[Liver(as,co,uil) + gm?] + box?] ->
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm-si,ox-1,jpo+4,s,sm,hs,sta,p,v,ui)[Liver(as,co,uil) + gm?] + box?]
+@ if (ox>0) && (jpo <= 0.3*bm)
+then (smr(t) - dsmr(co)) * lbmf(bm) else 0;
+
+
+//Normal Growth
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,       bm   ,ox  ,jpo   ,s,sm,hs,sta,p,v,ui)[gm?] + box?] ->
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l+lg(bm),bm+gi,ox-4,jpo-12,s,sm,hs,sta,p,v,ui)[gm?] + box?]
+@ if ((ox > 27) && (jpo > 10*bm) && (cf(l,bm) > lgt))
+then td(t,bm) * ebmf(bm) else 0;
+
+
+//Growth at low CI
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm   ,ox  ,jpo   ,s,sm,hs,sta,p,v,ui)[gm?] + box?] ->
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm+gi,ox-4,jpo-12,s,sm,hs,sta,p,v,ui)[gm?] + box?]
+@ if ((ox > 28) && (jpo > 10*bm) && (cf(l,bm) <= mgt))
+then td(t,bm) * ebmf(bm) else 0;
+
+
+//G01 Gonad energy allocation
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox  ,jpo   ,s,rc,hs,sta,p,v,ui)[Gon(s,n,mog,ec   ,gw   ,uig) + gm?] + box?] ->
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox-4,jpo-12,s,rc,hs,sta,p,v,ui)[Gon(s,n,mog,ec+gi,gw+gi,uig) + gm?] + box?] 
+@ if ((rc==2) && (ox > 27) && (jpo > 10*bm))
+then td(t,bm) * ebmf(bm) else 0;
+
+
+//G02 Gonad growth f
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[Gon(s,n,mog  ,ec,gw,uig) + gm?] + box?] ->
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[Gon(s,n,mog+1,0 ,gw,uig) + gm?] + box?] 
+@ if ((mog<8) && (s==0) && (0.08*0.15*bm<ec)) //function combining 8 steps and 8% of body weight for complete gonads
+then 1 else 0;
+
+//G02 Gonad growth m
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[Gon(s,n,mog  ,ec,gw,uig) + gm?] + box?] ->
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[Gon(s,n,mog+1,0 ,gw,uig) + gm?] + box?] 
+@ if ((mog<8) && (s==1) && (0.05*0.15*bm<ec)) //function combining 8 steps and 5% of body weight for complete gonads
+then 1 else 0;
+
+
+//Stomach Evacuation
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox   ,jpo   ,s,sm,hs,sta,p,v,ui)[Stc(pc,va,uis)[AJPO(od,et,df) + sc?] + gm?] + box?] ->
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox-od,jpo+et,s,sm,hs,sta,p,v,ui)[Stc(pc,va,uis)[                 sc?] + gm?] + box?]
+@ if ((ox > 25) && (jpo < 150*bm))
+then 0.05 * td(t,bm) * ebmf(bm) * count(sc?,'AJPO') * df else 0;
+
+
+//Ingestion
+Box(bn,t,o,sal,d,z,su,pa  ,ar,mind,mand)[
+GM(l,bm,ox,jpo,s,sm,1                                  ,sta,p,v,ui)[Stc(pc           ,va,uis)[                         sc?] + Liver(as,co         ,uil) + gm?] + Prey(pn,ps,pod,pet,pdf,ast,cot):np + box?] ->
+Box(bn,t,o,sal,d,z,su,pa-1,ar,mind,mand)[
+GM(l,bm,ox,jpo,s,sm,fil(count(sc?,'AJPO'),co,va,bm,o,t),sta,p,v,ui)[Stc(pc+(ps*0.013),va,uis)[(ps) AJPO(pod,pet,pdf) + sc?] + Liver(as,spi(co,cot),uil)  + gm?] + box?]
++ EAT
+@ if (jpo < 50*bm) && ((ps+count(sc?,'AJPO') < (msv(bm)*oda(o)*td(t,bm))))
+then 1 else 0;
+
+
+//Hunting with Success
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox,jpo,s,sm,0,sta,p,v,ui)[Stc(pc,va,uis)[sc?] + gm?] + box?] ->
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox,jpo,s,sm,1,sta,p,v,ui)[Stc(pc,va,uis)[sc?] + gm?] + box?]
++ HUNT
+@ if (jpo > 0.05*bm) && (count(sc?,'AJPO') <= 10)
+then 0.00075 else 0; 
+
+
+//Activity
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox  ,jpo  ,s,sm,hs,sta,p,v,ui)[Stc(pc,va,uis)[sc?] + gm?] + box?] ->
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox-4,jpo-2,s,sm,hs,sta,p,v,ui)[Stc(pc,va,uis)[sc?] + gm?] + box?]
++ ACT
+@ if ((ox > 26)&& (jpo > 0.2*bm))
+then (0.016*o-0.52) * 50 * lbmf(bm) else 0;
+
+
+//Death from starvation
+GM(l,bm,ox,jpo,s,sm,hs,sta,p,v,ui)[gm?] ->
+
+@ if (cf(l,bm) < lcft)
+then 1 else 0;
+
+
+//Death from Asphyxiation
+GM(l,bm,ox,jpo,s,sm,hs,sta,p,v,ui)[gm?] ->
+
+@ if (ox < 1)
+then 0.1 else 0;
+
+
+
+// REPRODUCTION											
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+//RC01 spent to preperation
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox,jpo,s,1,hs,bet,p,b,u)[Gon(s,n,mog,ec,gw,uig) + gm?] + box?] ->  //reproductive cycle is at spent aka 1
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox,jpo,s,2,hs,bet,p,b,u)[Gon(s,4,0  ,ec,gw,uig) + gm?] + box?]
+@ if 	(cf(l,bm) > 0.65)	//condition index is high enough
+&&	(dl(d)>10)		//AND daylength higher ten
+&&	(dl(d)<12.5)		//AND daylength lower 
+&&	(dldt(d)>0)		//AND it is the first half of the year
+then 1 else 0;
+
+
+//RC02 preperation to spawn
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox,jpo,s,2,hs,bet,p,b,u)[Gon(s,n,mog,ec,gw,uig) + gm?] + box?] ->  
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox,jpo,s,3,hs,bet,p,b,u)[Gon(s,n,mog,ec,gw,uig) + gm?] + box?] 
+@ if 	(mog==8)		//gonads are mature
+then 1 else 0;
+
+
+//RC03 spawning - mating
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(lf,bmf,oxf,jpof,0,3,hsf,betf,pf,bf,uif)[Gon(sf,nf,mogf,ecf,gwf,uigf) + gmf?] + GM(lm,bmm,oxm,jpom,1,3,hsm,betm,pm,bm,uim)[Gon(sm,nm,mogm,ecm,gwm,uigm) + gmm?] + box?] ->
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(lf,bmf,oxf,jpof,0,4,hsf,betf,pf,bf,uif)[Gon(sf,0 ,0   ,ecf,gwf,uigf) + gmf?] + GM(lm,bmm,oxm,jpom,1,4,hsm,betm,pm,bm,uim)[Gon(sm,0 ,0   ,ecm,gwm,uigm) + gmm?] + nf GME(0,stacomb(betf,betm)) + box?]
++MATE
+@ if 	(betf==betm) 		//male and female have the same stock affiliation
+&& 	(nm>0)			//the male has gonads
+&& 	(nf>0) 			//the female has gonads
+&& 	(mogm==8) 		//the male gonads are mature
+&& 	(mogf==8)		//the female gonads are mature
+then 1 else 0; 
+
+
+//RC04 spawn to spent
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox,jpo,s,4,hs,bet,p,b,u)[Gon(s,n,mog,ec,gw,uig) + gm?] + box?] ->  
+Box(bn,t,o,sal,d,z,su,pa,ar,mind,mand)[GM(l,bm,ox,jpo,s,1,hs,bet,p,b,u)[Gon(s,n,mog,ec,gw,uig) + gm?] + box?]
+@ if 	(n==0)			//gonads are empty
+then 1 else 0;
+
+
+
+// Movement						
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+//37::1 {bornholm slope -> bornholm pelagic}  
+Box(bn37,t37,o37,sal37,d37,z37,sub37,pa37,ar37,mind37,mand37)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,v,ui)[gm?] + ths?] + Box(bn1,t1,o1,sal1,d1,z1,sub1,pa1,ar1,mind1,mand1)[one?                                   ]->
+Box(bn37,t37,o37,sal37,d37,z37,sub37,pa37,ar37,mind37,mand37)[ths?                                   ] + Box(bn1,t1,o1,sal1,d1,z1,sub1,pa1,ar1,mind1,mand1)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,bn1,ui)[gm?] + one?]
+@ if (    (((bn37==37) ||(bn37==38) ||(bn37==39) ||(bn37==40) ||(bn37==41) ||(bn37==42) ||(bn37==43) ||(bn37==44) ||(bn37==45) ||(bn37==46) ||(bn37==47) ||(bn37==48))
+	&& ((bn1==1)   ||(bn1==2)   ||(bn1==3)   ||(bn1==4)   ||(bn1==5)   ||(bn1==6)   ||(bn1==7)   ||(bn1==8)   ||(bn1==9)   ||(bn1==10)  ||(bn1==11)  ||(bn1==12)))		//assign functional box-groups
+		&& ((rc==3) 				// transition likely: if sexual cycle at 'wanting to spawn' (3) 
+			|| ((rc==1) && (dl(d1)<7))	// OR sexual cycle at 'spent' (1) AND daylength is shorter than 7 hours
+			|| ((rc==2) && (dl(d1)>7))))
+then 0.00006 else 0;
+
+
+//1::13 {bornholm pelagic -> bornholm basin slope}
+Box(bn1,t1,o1,sal1,d1,z1,sub1,pa1,ar1,mind1,mand1)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,v,ui)[gm?] + one?] + Box(bn13,t13,o13,sal13,d13,z13,sub13,pa13,ar13,mind13,mand13)[thi?                                   ]->
+Box(bn1,t1,o1,sal1,d1,z1,sub1,pa1,ar1,mind1,mand1)[one?                                   ] + Box(bn13,t13,o13,sal13,d13,z13,sub13,pa13,ar13,mind13,mand13)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,bn13,ui)[gm?] + thi?]
+@ if (    (((bn1==1)   ||(bn1==2)   ||(bn1==3)   ||(bn1==4)   ||(bn1==5)   ||(bn1==6)   ||(bn1==7)   ||(bn1==8)   ||(bn1==9)   ||(bn1==10)  ||(bn1==11)  ||(bn1==12))
+	&& ((bn13==13) ||(bn13==14) ||(bn13==15) ||(bn13==16) ||(bn13==17) ||(bn13==18) ||(bn13==19) ||(bn13==20) ||(bn13==21) ||(bn13==22) ||(bn13==23) ||(bn13==24)))		//assign functional box-groups
+		&& ((rc==3) 				// transition likely: if sexual cycle at 'wanting to spawn' (3) 
+			|| ((rc==1) && (dl(d1)<7))	// OR sexual cycle at 'spent' (1) AND daylength is shorter than 7 hours
+			|| ((rc==2) && (dl(d1)>7))))
+then 0.00006 else 0;
+
+
+//13::25 {bornholm basin -> basin deep}
+Box(bn13,t13,o13,sal13,d13,z13,sub13,pa13,ar13,mind13,mand13)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,v,ui)[gm?] + thi?] + Box(bn25,t25,o25,sal25,d25,z25,sub25,pa25,ar25,mind25,mand25)[twf?                                   ]->
+Box(bn13,t13,o13,sal13,d13,z13,sub13,pa13,ar13,mind13,mand13)[thi?                                   ] + Box(bn25,t25,o25,sal25,d25,z25,sub25,pa25,ar25,mind25,mand25)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,bn25,ui)[gm?] + twf?]
+@ if (    (((bn13==13) ||(bn13==14) ||(bn13==15) ||(bn13==16) ||(bn13==17) ||(bn13==18) ||(bn13==19) ||(bn13==20) ||(bn13==21) ||(bn13==22) ||(bn13==23) ||(bn13==24)) 
+	&& ((bn25==25) ||(bn25==26) ||(bn25==27) ||(bn25==28) ||(bn25==29) ||(bn25==30) ||(bn25==31) ||(bn25==32) ||(bn25==33) ||(bn25==34) ||(bn25==35) ||(bn25==36)))		//assign functional box-groups
+		&& (rc==3))		//transition likely: if sexual cycle at 'wanting to spawn' (3)
+then 0.00006 else 0;
+
+
+//25::13 {basin deep -> basin slope}
+Box(bn25,t25,o25,sal25,d25,z25,sub25,pa25,ar25,mind25,mand25)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,v,ui)[gm?] + twf?] + Box(bn13,t13,o13,sal13,d13,z13,sub13,pa13,ar13,mind13,mand13)[thi?                                   ]->
+Box(bn25,t25,o25,sal25,d25,z25,sub25,pa25,ar25,mind25,mand25)[twf?                                   ] + Box(bn13,t13,o13,sal13,d13,z13,sub13,pa13,ar13,mind13,mand13)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,bn13,ui)[gm?] + thi?]
+@ if (    (((bn13==13) ||(bn13==14) ||(bn13==15) ||(bn13==16) ||(bn13==17) ||(bn13==18) ||(bn13==19) ||(bn13==20) ||(bn13==21) ||(bn13==22) ||(bn13==23) ||(bn13==24)) 
+	&& ((bn25==25) ||(bn25==26) ||(bn25==27) ||(bn25==28) ||(bn25==29) ||(bn25==30) ||(bn25==31) ||(bn25==32) ||(bn25==33) ||(bn25==34) ||(bn25==35) ||(bn25==36)))		//assign functional box-groups
+		&& (rc==1))		//transition likely: if sexual cycle at 'spent' (1)
+then 0.00006 else 0;
+
+
+//13::1 {bornholm basin -> bornholm pelagic}
+Box(bn13,t13,o13,sal13,d13,z13,sub13,pa13,ar13,mind13,mand13)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,v,ui)[gm?] + thi?] + Box(bn1,t1,o1,sal1,d1,z1,sub1,pa1,ar1,mind1,mand1)[one?                                   ] ->
+Box(bn13,t13,o13,sal13,d13,z13,sub13,pa13,ar13,mind13,mand13)[thi?                                   ] + Box(bn1,t1,o1,sal1,d1,z1,sub1,pa1,ar1,mind1,mand1)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,bn1,ui)[gm?] + one?] 
+@ if (    (((bn13==13) ||(bn13==14) ||(bn13==15) ||(bn13==16) ||(bn13==17) ||(bn13==18) ||(bn13==19) ||(bn13==20) ||(bn13==21) ||(bn13==22) ||(bn13==23) ||(bn13==24)) 
+	&& ((bn1==1)   ||(bn1==2)   ||(bn1==3)   ||(bn1==4)   ||(bn1==5)   ||(bn1==6)   ||(bn1==7)   ||(bn1==8)   ||(bn1==9)   ||(bn1==10)  ||(bn1==11)  ||(bn1==12)))		//assign functional box-groups
+		&& (((rc==2) && (dl(d1)>10)) 			//transition likely: if sexual cycle at 'preparing' (2) AND daylength longer 10 hours 
+			||  ((rc==1) && (dl(d1)>8.13))		//OR: sexual cycle at 'spent' (1) AND daylength is longer 8.13 hours
+			||  ((rc==3) && (dl(d1)<8.13))))
+then 0.00006 else 0;
+
+
+//1::37 {bornholm pelagic -> bornholm slope}
+Box(bn1,t1,o1,sal1,d1,z1,sub1,pa1,ar1,mind1,mand1)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,v,ui)[gm?] + one?] + Box(bn37,t37,o37,sal37,d37,z37,sub37,pa37,ar37,mind37,mand37)[ths?                                   ] ->
+Box(bn1,t1,o1,sal1,d1,z1,sub1,pa1,ar1,mind1,mand1)[one?                                   ] + Box(bn37,t37,o37,sal37,d37,z37,sub37,pa37,ar37,mind37,mand37)[GM(l,bm,ox,jpo,s,rc,hs,bet,p,bn37,ui)[gm?] + ths?]
+@ if (    (((bn1==1)   ||(bn1==2)   ||(bn1==3)   ||(bn1==4)   ||(bn1==5)   ||(bn1==6)   ||(bn1==7)   ||(bn1==8)   ||(bn1==9)   ||(bn1==10)  ||(bn1==11)  ||(bn1==12)) 
+	&& ((bn37==37) ||(bn37==38) ||(bn37==39) ||(bn37==40) ||(bn37==41) ||(bn37==42) ||(bn37==43) ||(bn37==44) ||(bn37==45) ||(bn37==46) ||(bn37==47) ||(bn37==48)))		//assign functional box-groups
+		&& (((rc==2) && (dl(d1)>10)) 			//transition likely: if sexual cycle at 'preparing' (2) AND daylength longer 10 hours 
+			||  ((rc==1) && (dl(d1)>8.13))		//OR: sexual cycle at 'spent' (1) AND daylength is longer 8.13 hours
+			||  ((rc==3) && (dl(d1)<8.13))))
+then 0.00006 else 0;
+
+
+
+// PREY						
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+//P01 - 01 replenish prey - Bornholm Pelagic
+Box(bn,t,o,sal,d,z,subs,pa     ,ar,mind,mand)[box?] ->
+Box(bn,t,o,sal,d,z,subs,pa+2317,ar,mind,mand)[box? 
++ 1743 Prey ('ringworm'   ,toInt(unif(1,2))      ,6,17,1   , 0 ,0)
++ 2    Prey ('crab'       ,toInt(unif(30,300))  ,6,17,1.23, 0 ,0)
++ 22   Prey ('herring'    ,toInt(unif(115,300)) ,8,24,1.13, 0 ,paraass(lop))
++ 253  Prey ('crangon'    ,toInt(unif(38,300))   ,6,17,1   , 0 ,paraass(lop))
++ 1    Prey ('cod'        ,toInt(unif(115,300)) ,5,14,1.45, 0 ,paraass(lop))
++ 23   Prey ('goby'       ,toInt(unif(115,300)) ,5,14,1.45, 0 ,paraass(lop))
++ 114  Prey ('mollusc'    ,toInt(unif(15,54))    ,6,17,1.23, 0 ,0)
++ 93   Prey ('peracarida' ,toInt(unif(38,300))   ,6,17,1   , 0 ,0)
++ 14   Prey ('flatfish'   ,toInt(unif(115,300)) ,5,14,1.45, 0 ,paraass(lop))
++ 7    Prey ('isopod'     ,toInt(unif(15,300))   ,6,17,1   , 0 ,paraass(lop))
++ 45   Prey ('sprat'      ,toInt(unif(115,300)) ,8,24,1.13, 0 ,paraass(lop))
+]
+@ if (bn==1) && (count(box?,'Prey') <= 1) 
+then 1 else 0;
+
+
+//P01 - 13 replenish prey - Bornholm Basin Slope
+Box(bn,t,o,sal,d,z,subs,pa    ,ar,mind,mand)[box?] ->
+Box(bn,t,o,sal,d,z,subs,pa+725,ar,mind,mand)[box? 
++ 436 Prey ('ringworm'  ,toInt(unif(1,2))     ,6,17,1   ,0,0)
++ 17  Prey ('herring'   ,toInt(unif(115,300)),8,24,1.13,0,paraass(lop))
++ 13  Prey ('crangon'   ,toInt(unif(38,300))  ,6,17,1   ,0,paraass(lop))
++ 2   Prey ('cod'       ,toInt(unif(115,300)),5,14,1.45,0,paraass(lop))
++ 76  Prey ('mollusc'   ,toInt(unif(15,54))   ,6,17,1.23,0,0)
++ 140 Prey ('peracarida',toInt(unif(38,300))  ,6,17,1   ,0,0)
++ 2   Prey ('flatfish'  ,toInt(unif(115,300)),5,14,1.45,0,paraass(lop))
++ 2   Prey ('isopod'    ,toInt(unif(15,300))  ,6,17,1   ,0,paraass(lop))
++ 37  Prey ('sprat'     ,toInt(unif(115,300)),8,24,1.13,0,paraass(lop))
+]
+@ if (bn==13) && (count(box?,'Prey') <= 1) 
+then 1 else 0;
+
+
+//P01 - 25 replenish prey - Bornholm Basin Deep
+Box(bn,t,o,sal,d,z,subs,pa    ,ar,mind,mand)[box?] ->
+Box(bn,t,o,sal,d,z,subs,pa+193,ar,mind,mand)[box?  
++ 13  Prey ('herring'   ,toInt(unif(115,300)),8,24,1.13,0,paraass(lop))
++ 7   Prey ('crangon'   ,toInt(unif(38,300))  ,6,17,1   ,0,paraass(lop))
++ 1   Prey ('cod'       ,toInt(unif(115,300)),5,14,1.45,0,paraass(lop))
++ 114 Prey ('mollusc'   ,toInt(unif(15,54))   ,6,17,1.23,0,0)
++ 23  Prey ('peracarida',toInt(unif(38,300))  ,6,17,1   ,0,0)
++ 6   Prey ('flatfish'  ,toInt(unif(115,300)),5,14,1.45,0,paraass(lop))
++ 29  Prey ('sprat'     ,toInt(unif(115,300)),8,24,1.13,0,paraass(lop))
+]
+@ if (bn==25) && (count(box?,'Prey') <= 1) 
+then 1 else 0;
+
+
+//P01 - 37 replenish prey - Bornholm slope
+Box(bn,t,o,sal,d,z,subs,pa     ,ar,mind,mand)[box?] ->
+Box(bn,t,o,sal,d,z,subs,pa+2317,ar,mind,mand)[box? 
++ 1743 Prey ('ringworm'  ,toInt(unif(1,2))     ,6,17,1   ,0,0)
++ 2    Prey ('crab'      ,toInt(unif(30,300)) ,6,17,1.23,0,0)
++ 22   Prey ('herring'   ,toInt(unif(115,300)),8,24,1.13,0,paraass(lop))
++ 253  Prey ('crangon'   ,toInt(unif(38,300))  ,6,17,1   ,0,paraass(lop))
++ 1    Prey ('cod'       ,toInt(unif(115,300)),5,14,1.45,0,paraass(lop))
++ 23   Prey ('goby'      ,toInt(unif(115,300)),5,14,1.45,0,paraass(lop))
++ 114  Prey ('mollusc'   ,toInt(unif(15,54))   ,6,17,1.23,0,0)
++ 93   Prey ('peracarida',toInt(unif(38,300))  ,6,17,1   ,0,0)
++ 14   Prey ('flatfish'  ,toInt(unif(115,300)),5,14,1.45,0,paraass(lop))
++ 7    Prey ('isopod'    ,toInt(unif(15,300))  ,6,17,1   ,0,paraass(lop))
++ 45   Prey ('sprat'     ,toInt(unif(115,300)),8,24,1.13,0,paraass(lop))
+]
+@ if (bn==37) && (count(box?,'Prey') <= 1) 
+then 1 else 0;
+
+
+
+// DAY						
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+Box(1,t1,o1,sal1,d1,z1,substr1,pa1,ar1,mind1,max1)[r1?]+
+Box(13,t13,o13,sal2,d2,z13,substr13,pa13,ar13,mind13,max13)[r13?]+
+Box(25,t25,o25,sal3,d3,z25,substr25,pa25,ar25,mind25,max25)[r25?]+
+Box(37,t37,o37,sal4,d4,z37,substr37,pa37,ar37,mind37,max37)[r37?]->
+
+Box(1,t1,o1,sal1,d1+1,z1,substr1,pa1,ar1,mind1,max1)[r1?]+
+Box(13,t13,o13,sal2,d2+1,z13,substr13,pa13,ar13,mind13,max13)[r13?]+
+Box(25,t25,o25,sal3,d3+1,z25,substr25,pa25,ar25,mind25,max25)[r25?]+
+Box(37,t37,o37,sal4,d4+1,z37,substr37,pa37,ar37,mind37,max37)[r37?]
+
+@EACH2400;
+
+
+// HABITAT					
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+
+Box(1,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(1,6,83,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(1);//Januar
+Box(1,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(1,4,73,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(73000);//Februar
+Box(1,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(1,3,76,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(146000);//Maerz
+Box(1,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(1,4,64,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(219000);//April
+Box(1,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(1,5,62,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(292000);//Mai
+Box(1,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(1,8,61,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(365000);//Juni
+Box(1,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(1,10,98,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(438000);//Juli
+Box(1,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(1,15,99,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(511000);//August
+Box(1,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(1,18,67,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(584000);//September
+Box(1,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(1,11,95,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(657000);//Oktober
+Box(1,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(1,10,76,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(730000);//November
+Box(1,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(1,8,80,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(803000);//Dezember
+Box(13,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(13,6,99,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(13);//Januar
+Box(13,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(13,5,62,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(72988);//Februar
+Box(13,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(13,5,81,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(145988);//Maerz
+Box(13,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(13,5,83,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(218988);//April
+Box(13,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(13,5,84,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(291988);//Mai
+Box(13,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(13,5,64,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(364988);//Juni
+Box(13,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(13,6,91,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(437988);//Juli
+Box(13,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(13,5,70,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(510988);//August
+Box(13,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(13,5,93,35,d,z,substr,pa,ar,0,1)[rest?]@EXACT(583988);//September
+Box(13,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(13,6,88,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(656988);//Oktober
+Box(13,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(13,5,77,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(729988);//November
+Box(13,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(13,7,84,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(802988);//Dezember
+Box(25,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(25,7,70,36,d,z,substr,pa,ar,0,1)[rest?]@EXACT(25);//Januar
+Box(25,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(25,7,65,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(72976);//Februar
+Box(25,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(25,7,67,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(145976);//Maerz
+Box(25,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(25,7,72,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(218976);//April
+Box(25,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(25,7,75,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(291976);//Mai
+Box(25,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(25,7,67,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(364976);//Juni
+Box(25,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(25,7,71,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(437976);//Juli
+Box(25,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(25,7,72,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(510976);//August
+Box(25,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(25,7,72,33,d,z,substr,pa,ar,0,1)[rest?]@EXACT(583976);//September
+Box(25,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(25,7,89,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(656976);//Oktober
+Box(25,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(25,7,77,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(729976);//November
+Box(25,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(25,7,84,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(802976);//Dezember
+Box(37,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(37,8,67,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(37);//Januar
+Box(37,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(37,7,69,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(72964);//Februar
+Box(37,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(37,5,91,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(145964);//Maerz
+Box(37,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(37,4,86,32,d,z,substr,pa,ar,0,1)[rest?]@EXACT(218964);//April
+Box(37,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(37,5,78,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(291964);//Mai
+Box(37,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(37,6,68,37,d,z,substr,pa,ar,0,1)[rest?]@EXACT(364964);//Juni
+Box(37,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(37,5,63,38,d,z,substr,pa,ar,0,1)[rest?]@EXACT(437964);//Juli
+Box(37,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(37,6,85,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(510964);//August
+Box(37,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(37,7,91,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(583964);//September
+Box(37,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(37,8,88,31,d,z,substr,pa,ar,0,1)[rest?]@EXACT(656964);//Oktober
+Box(37,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(37,9,64,34,d,z,substr,pa,ar,0,1)[rest?]@EXACT(729964);//November
+Box(37,t,o,sal,d,z,substr,pa,ar,mind,mand)[rest?]->Box(37,9,71,39,d,z,substr,pa,ar,0,1)[rest?]@EXACT(802964);//Dezember
+

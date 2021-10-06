@@ -1,0 +1,535 @@
+// Basic_variable_ex - Growth experiment for Basic physiology with variability of food intake level
+// experiment duration: 12 weeks aka 201600 TU
+
+
+// PARAMETERS
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+
+//Euler's number
+//-> known mathematical constant
+//-> no source needed
+e	:2.71828;
+
+//starvation increment in [g]
+//-> ammount of body mass decrease for standard metabolic rate and a gain of 4 JPO
+//-> energy-mass-balance considerations (based on average energy density of body mass)
+si	:0.0005;
+
+//growth increment in [g]
+//-> ammount of body mass increase exchanged for 12 JPO
+//-> energy-mass-balance considerations
+gi	:0.00587;
+
+//standard body mass factor
+//-> a from W=a*L^b (W in [g], L in [cm] from standard weight in fish)
+//-> from Thuenen Data
+aa	:0.00743;
+
+//standard body mass exponent
+//-> b for W=a*L^b (W in [g], L in [cm] from standard weight in fish)
+//-> from Thuenen Data
+bb	:3.06;
+
+//length growth threshold
+//-> condition factor threshold below which length growth is suspended
+//-> based on DUTIL et al 2000
+lgt	:0.8;
+
+//mass growth threshold
+//-> condition factor threshold above which length growth is suspended
+//-> based on DUTIL et al 2000
+mgt	:1.2;
+
+//lethal condition factor threshold
+//-> condition factor threshold for low-condition-mortality
+//-> based on DUTIL et al 2000
+lcft	:0.6;
+
+o	:100;		//oxygen saturation in [%] for parameter scans (with SESSL) - default value
+t	:10;		//temperature in [°C] for parameter scans (with SESSL) - default value
+va	:1;			//variable food intake level for parameter scans (with SESSL) - default value
+
+
+//FUNCTIONS		-> 1 hour = 100TU  
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+
+//linear body mass factor
+//-> scales rates linearly for body mass of individual	
+//-> required to reproduce wet-lab equations
+lbmf:: num -> num;
+lbmf bm = (bm/10000);
+
+//acitve metabolic rate
+//-> gives the rate for maximum oxygen intake dependent on oxygen saturation and temperature
+//-> taken from: 	Influence of water temperature and oxygenation on the aerobic metabolic scope of Atlantic cod (Gadus morhua)
+//					Claireaux et al. 2000
+amr:: num -> num -> num;
+amr ox temp = (1-(e)^(0.34-0.035*ox))*(30.01+17.29*(temp)^(1.062-0.015*temp));
+
+//standard metabolic rate
+//-> gives the rate for basal metabolic rate
+//-> taken from: 	Influence of water temperature and oxygenation on the aerobic metabolic scope of Atlantic cod (Gadus morhua)
+//					Claireaux et al. 2000			
+smr:: num -> num;	
+smr temp = (80.1*(1-(e)^(-0.185*(temp)^(0.79))));
+
+//length gain
+//-> calculates the gain in length according to a given gain in mass allometrically
+//-> taken from:	Thünen Data on on growth			 
+lg:: num -> num;
+lg bm = (((bm)/aa)^(1/bb)-((bm-gi)/aa)^(1/bb))*10;
+
+//exponential body mass factor
+//-> scales rates exponentially for body mass of individual
+ebmf:: num -> num;	
+ebmf bm = bm^(1/3);
+
+//temperature dependency
+//-> scales rates for body-mass dependent temperature optimum
+//-> derived from:	Optimal temperature for growth and feed conversion of immature cod (Gadus morhua L.)
+//					Björnsson 2001
+td:: num -> num -> num;
+td temp bm = (-0.007*(temp - (22*(bm)^(-0.1507)))^(2) + 1);
+
+//condition factor
+// calculates the condition factor
+//-> established ratio	
+cf:: num -> num -> num;
+cf l bm = (100000*bm)/((l)^(3));
+
+//maximum stomach volume
+msv:: num -> num;
+msv bm = (bm*70/13);
+
+//oxygen dependent appetite
+oda:: num -> num;
+oda ox = 0.93*(1 - (e)^(-0.03*(ox - 10)));
+
+//food intake level 
+fil :: num -> num -> num -> num -> num -> num;
+fil xn xv xbm xo xt =  if (xn < (xv * 0.8 * (xbm*70/13) * (0.93*(1-(e)^(-0.03*(xo-10)))) * (-0.007*(xt-(22*(xbm)^(-0.1507)))^(2)+1))) then 1 else 0;
+
+
+// SPECIES DEFINITIONS
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+
+//cod (Gadus morhua)	->		#
+//	l		length in [mm]
+//	bm		body mass in [g]
+//	ox		oxygen content [0.1 mg]
+//	jpo		energy content [jule per oxygen - 2.7 J/(0.2 mg oxygen)]
+//	s		sex [0,1] ((female,male))
+//	rc		reproductive cycle [1,2,3,4]	[spent,preperation, wanting to spawn,spawning]	
+//	hs		hunting success in [0,1]			governs ingestion
+//	sta		stock affiliation in ['E','W','H']
+//	p		defines particular physiological performance
+//	v 		records volume in which individual resides
+//	ui		unique identifyer				makes it possible to track individual fish
+GM(num,num,num,num,num,num,num,string,num,num,num)[];
+
+//stomach		-> 
+//	pc		consumed prey in [g]
+//	va		variability of food intake level
+//	uis		unique identifyer stomach
+Stc(num,num,num)[];
+
+//food pieces			-> in [0.013 g] 
+//	od		oxygen demand in [O]
+//	t		energy transfer in [JPO]
+//	f		digestive factor 				scales the rate of digestion for type
+AJPO(num,num,num);
+
+//prey			->		#
+//	pn		'name'
+//	s		size in [0.013g] 
+//	pod		prey type oxygen consumption 			the 'prey type' attributes are passed on to the respective food pieces
+//	pet		prey type energy gain 
+//	pdf		prey type digestive factor
+//	ast		Anisakis simplex transfer		[0,1]
+//	cot		Contracaecum osculatum	transfer	[0,1]
+Prey(string,num,num,num,num,num,num);
+
+//experimental tank	-> 
+Tank()[];
+
+
+// INITIAL SOLUTION
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+>>INIT[	Tank[
+	GM(442,715,30,50,0,1,0,'E',1,1,1001)[Stc(0,va,1001)[]]]];
+
+//       l,bm,ox,jpo,sex,rc,hs,stf,part,box,ui
+
+// RULE SCHEMATA
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+
+//METABOLISM
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+//Oxygen Intake
+GM(l,bm,ox  ,ec,s,rc,hs,sta,p,v,ui)[gm?] ->
+GM(l,bm,ox+1,ec,s,rc,hs,sta,p,v,ui)[gm?]
+@ if (ox < 30)
+then amr(o,t) * lbmf(bm) else 0;
+
+
+//Standard metabolic rate
+GM(l,bm,ox  ,jpo  ,s,rc,hs,sta,p,v,ui)[gm?] ->
+GM(l,bm,ox-1,jpo-1,s,rc,hs,sta,p,v,ui)[gm?]
+@ if (ox>0) && (jpo > 0.3*bm)
+then smr(t) * lbmf(bm) else 0;
+
+
+//Starvation
+GM(l,bm   ,ox  ,jpo  ,s,rc,hs,sta,p,v,ui)[gm?] ->
+GM(l,bm-si,ox-1,jpo+4,s,rc,hs,sta,p,v,ui)[gm?]
+@ if (ox>0) && (jpo <= 0.3*bm)
+then smr(t) * lbmf(bm) else 0;
+
+
+//Normal Growth
+GM(l,       bm   ,ox  ,jpo   ,s,rc,hs,sta,p,v,ui)[gm?] ->
+GM(l+lg(bm),bm+gi,ox-4,jpo-12,s,rc,hs,sta,p,v,ui)[gm?]
+@ if ((ox > 27) && (jpo > 10*bm) && (cf(l,bm) > lgt))
+then td(t,bm) * ebmf(bm) else 0;
+
+
+//Growth at low CI
+GM(l,bm   ,ox  ,jpo   ,s,rc,hs,sta,p,v,ui)[gm?] ->
+GM(l,bm+gi,ox-4,jpo-12,s,rc,hs,sta,p,v,ui)[gm?]
+@ if ((ox > 28) && (jpo > 10*bm) && (cf(l,bm) <= mgt))
+then td(t,bm) * ebmf(bm) else 0;
+
+
+//Stomach Evacuation
+GM(l,bm,ox   ,jpo   ,s,rc,hs,sta,p,v,ui)[Stc(pc,va,uis)[AJPO(od,et,df) + sc?] + gm?] ->
+GM(l,bm,ox-od,jpo+et,s,rc,hs,sta,p,v,ui)[Stc(pc,va,uis)[                 sc?] + gm?]
+@ if ((ox > 25) && (jpo < 150*bm))
+then 0.05 * td(t,bm) * ebmf(bm) * count(sc?,'AJPO') * df else 0;
+
+
+//Ingestion
+GM(l,bm,ox,jpo,s,rc,1                               ,sta,p,v,ui)[Stc(pc           ,va,uis)[                         sc?] + gm?] + Prey(pn,ps,pod,pet,pdf,ast,cot):np ->
+GM(l,bm,ox,jpo,s,rc,fil(count(sc?,'AJPO'),va,bm,o,t),sta,p,v,ui)[Stc(pc+(ps*0.013),va,uis)[(ps) AJPO(pod,pet,pdf) + sc?] + gm?]
+@ if (jpo < 50*bm) && ((ps+count(sc?,'AJPO') < (1.4 * msv(bm)*oda(o)*td(t,bm))))
+then 1 else 0;
+
+
+//Hunting with Success
+//GM(l,bm,ox,jpo,s,rc,0,sta,p,v,ui)[Stc[AJPO(od,et,df) + sc?] + gm?] ->
+//GM(l,bm,ox,jpo,s,rc,1,sta,p,v,ui)[Stc[AJPO(od,et,df) + sc?] + gm?]
+//@ if (jpo > 0.05*bm))
+//then (0.016*o-0.52)*10*lbmf(bm) else 0;
+
+
+//Activity
+GM(l,bm,ox  ,jpo  ,s,rc,hs,sta,p,v,ui)[Stc(pc,va,uis)[AJPO(od,et,df) + sc?] + gm?] ->
+GM(l,bm,ox-2,jpo-1,s,rc,hs,sta,p,v,ui)[Stc(pc,va,uis)[AJPO(od,et,df) + sc?] + gm?]	
+@ if ((ox > 26)&& (jpo > 0.25*bm))
+then (0.016*o-0.52) * 5 * lbmf(bm) else 0;
+
+
+//Death from starvation
+GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] ->
+
+@ if (cf(l,bm) < lcft)
+then 1 else 0;
+
+
+//Death from Asphyxiation
+GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] ->
+
+@ if (ox < 1)
+then 0.1 else 0;
+
+
+// FEEDING REGIME
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//1st week monday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 1200;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//1st week wednesday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 6000;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//1st week friday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 10800;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//2nd week monday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 18000;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//2nd week wednesday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 22800;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//2nd week friday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 27600;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//3rd week monday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 34800;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//3rd week wednesday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 39600;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//3rd week friday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 44400;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//4th week monday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 51600;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//4th week wednesday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 56400;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//4th week friday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 61200;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//5th week monday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 68400;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//5th week wednesday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 73200;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//5th week friday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 78000;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//6th week monday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 85200;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//6th week wednesday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 90100;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//6th week friday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 94800;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//7th week monday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 102000;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//7th week wednesday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 106800;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//7th week friday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 111600;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//8th week monday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 118800;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//8th week wednesday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 123600;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//8th week friday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 128400;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//9th week monday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 135600;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//9th week wednesday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 140400;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//9th week friday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 145200;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//10th week monday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 152400;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//10th week wednesday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 157200;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//10th week friday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 162000;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//11th week monday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 169200;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//11th week wednesday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 174000;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//11th week friday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 178800;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//12th week monday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 186000;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//12th week wednesday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 190800;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//12th week friday in
+Tank[GM(l,bm,ox,jpo,s,rc,1 ,sta,p,v,ui)[gm?] + t? + 15 Prey('capelin fillet',577,4,16,1,0,0) + 20 Prey('capelin fillet',385,4,16,1,0,0) + 20 Prey('capelin fillet',900,4,16,1,0,0)]
+@EXACT 195600;
+
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//1st week monday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 1300;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//1st week wednesday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 6100;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//1st week friday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 10900;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//2nd week monday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 18100;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//2nd week wednesday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 22900;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//2nd week friday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 27700;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//3rd week monday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 34900;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//3rd week wednesday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 39700;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//3rd week friday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 44500;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//4th week monday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 51700;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//4th week wednesday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 56500;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//4th week friday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 61300;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//5th week monday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 68500;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//5th week wednesday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 73300;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//5th week friday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 78100;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//6th week monday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 85300;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//6th week wednesday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 90200;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//6th week friday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 94900;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//7th week monday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 102100;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//7th week wednesday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 106900;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//7th week friday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 111700;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//8th week monday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 118900;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//8th week wednesday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]									
+@EXACT 123700;												
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//8th week friday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 128500;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//9th week monday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 135700;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//9th week wednesday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 140500;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//9th week friday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 145300;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//10th week monday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 152500;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//10th week wednesday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 157300;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//10th week friday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 162100;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//11th week monday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 169300;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//11th week wednesday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 174100;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//11th week friday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 178900;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//12th week monday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 186100;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//12th week wednesday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 190900;
+
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?] + t?] ->			//12th week friday out
+Tank[GM(l,bm,ox,jpo,s,rc,hs,sta,p,v,ui)[gm?]]
+@EXACT 195700;
+												
