@@ -320,3 +320,56 @@ p_liver_cond <- liver_ex %>%
 p_liver_cond
 
 
+
+pp_comp_liver_ex <- subset(comp_liver_ex,comp_liver_ex$type=="simulation")
+
+
+# assign names to level of food intake level
+pp_comp_liver_ex$infestation<-
+  pp_comp_liver_ex$infestation[pp_comp_liver_ex$lop==0.0]<-"0.0 none"
+pp_comp_liver_ex$infestation[pp_comp_liver_ex$lop==0.2]<-"0.2 medium"
+pp_comp_liver_ex$infestation[pp_comp_liver_ex$lop==0.8]<-"0.8 high"
+pp_comp_liver_ex$infestation[pp_comp_liver_ex$lop==1.0]<-"1.0 all"
+pp_comp_liver_ex$infestation[is.na(pp_comp_liver_ex$var)]<-NA
+
+
+#plot a result for publication
+pp_liver_length <- 0
+pp_liver_length <- pp_comp_liver_ex %>%
+  plot_ly(type = 'scatter',mode = 'markers',
+          x = ~oxygen,
+          y = ~mean_length+442,
+          #symbol = ~infestation,
+          #symbols = c(21,23,24,25),
+          color = ~infestation,
+          colors = gray,
+          marker = list(
+            size = 18,
+            opacity = 0.8,
+            line = list(
+              color = 'rgb(0, 0, 0)',
+              width = 1),showlegend=T))%>% 
+  layout(
+    margin = list(t=50),
+    
+    title = list(
+      text="Growth for different oxygen and prey infestation levels H1",
+      font= list(size = 25)),
+    
+    xaxis = list(title = list(
+      text="Oxygen Saturation [%]",
+      font= list(size = 20)),
+      tickfont = list(size = 15)),
+    
+    yaxis = list(title = list(
+      text="Average Final Length [mm]",
+      font= list(size = 20)),
+      tickfont = list(size = 15)),
+    
+    legend = list(
+      title = list(text="<b> Food intake level </b>",font= list(size = 18)),
+      font = list(size = 20),
+      x = 0.02, y = 0.98))
+
+
+pp_liver_length
