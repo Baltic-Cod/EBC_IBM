@@ -299,23 +299,47 @@ p_basic_variable_weight
 
 
 
-#plot a result
-p_basic_variable_cond <- 0
-p_basic_variable_cond <- basic_variable_ex %>%
+
+#plot a result for paper
+pp_basic_variable_length <- 0
+pp_basic_variable_length <- basic_variable_ex %>%
   plot_ly(type = 'scatter',mode = 'markers',
           x = ~oxygen,
-          y = ~condition_factor,
-          color = ~food_intake_level,
-          colors = c("firebrick","darkviolet","royalblue","forestgreen"),
-          hoverinfo = "text",
-          hovertext = paste
-          ("Food intake level :",basic_variable_ex$var,"[0-1]<br>",
-            "Weight                       :",basic_variable_ex$weight,"[g]<br>",
-            "Length                       :",basic_variable_ex$length,"[mm]<br>"
-          ))%>% layout(title = "Condition factor at different oxygen levels <br> with variable food intake levels",
-                       xaxis = list(title = "Oxygen Saturation [%]"),
-                       yaxis = list(title = "Condition Factor"))
+          y = ~length,
+          color = ~Food,
+          colors = c("white","grey84","grey45","black"),
+          marker = list(
+            size = 18,
+            opacity = 0.8,
+            line = list(
+              color = 'rgb(0, 0, 0)',
+              width = 1)),
+          showlegend=TRUE)%>% 
+  layout(
+    margin = list(t=50),
+    
+    title = list(
+      text="Growth for different oxygen and food intake levels",
+      font= list(size = 25)),
+    
+    xaxis = list(title = list(
+      text="Oxygen Saturation [%]",
+      font= list(size = 20)),
+      tickfont = list(size = 15)),
+    
+    yaxis = list(title = list(
+      text="Final Length [mm]",
+      font= list(size = 20)),
+      tickfont = list(size = 15)),
+    
+    legend = list(
+      title = list(text="<b>Food intake level</b>",font= list(size = 18)),
+      font = list(size = 20),
+      x = 0.04, 
+      y = 0.98
+      ))
 
-p_basic_variable_cond
+
+pp_basic_variable_length
 
 
