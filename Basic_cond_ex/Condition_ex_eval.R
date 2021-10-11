@@ -384,3 +384,73 @@ p_condition_cf
 
 
 
+
+
+pp_comp_condition_ex <- subset(comp_condition_ex,comp_condition_ex$type=="simulation")
+
+
+# assign names to level of food intake level
+pp_comp_condition_ex$infestation<-
+  pp_comp_condition_ex$infestation[pp_comp_condition_ex$lop==0.0]<-"0.0 none"
+pp_comp_condition_ex$infestation[pp_comp_condition_ex$lop==1.0]<-"1.0 all"
+pp_comp_condition_ex$infestation[is.na(pp_comp_condition_ex$var)]<-NA
+
+
+
+pp_comp_condition_ex$condition<-
+  pp_comp_condition_ex$condition[pp_comp_condition_ex$initial_cf==0.7]<-"0.7 min"
+pp_comp_condition_ex$condition[pp_comp_condition_ex$initial_cf==0.8]<-"0.8 low"
+pp_comp_condition_ex$condition[pp_comp_condition_ex$initial_cf==0.9]<-"0.9 medium"
+pp_comp_condition_ex$condition[pp_comp_condition_ex$initial_cf==1.0]<-"1.0 high"
+pp_comp_condition_ex$condition[pp_comp_condition_ex$initial_cf==1.1]<-"1.1 max"
+pp_comp_condition_ex$condition[is.na(pp_comp_condition_ex$initial_cf)]<-NA
+
+
+
+
+#plot a result for publication
+pp_condition_length <- 0
+pp_condition_length <- pp_comp_condition_ex %>%
+  plot_ly(type = 'scatter',mode = 'markers',
+          x = ~oxygen,
+          y = ~mean_length+442,
+          symbol = ~infestation,
+          #symbols = c(21,23,24,25),
+          color = ~condition,
+          colors = gray,
+          marker = list(
+            size = 18,
+            opacity = 0.8,
+            line = list(
+              color = 'rgb(0, 0, 0)',
+              width = 1),
+          showlegend=T))%>% 
+  layout(
+    margin = list(t=50),
+    
+    title = list(
+      text="Growth for different oxygen and prey infestation levels H2",
+      font= list(size = 25)),
+    
+    xaxis = list(title = list(
+      text="Oxygen Saturation [%]",
+      font= list(size = 20)),
+      tickfont = list(size = 15)),
+    
+    yaxis = list(title = list(
+      text="Average Final Length [mm]",
+      font= list(size = 20)),
+      tickfont = list(size = 15)),
+    
+    legend = list(
+      title = list(text="<b> Food intake level </b>",font= list(size = 18)),
+      font = list(size = 15),
+      x = 0.02, y = 0.98))
+
+
+pp_condition_length
+
+
+
+
+
