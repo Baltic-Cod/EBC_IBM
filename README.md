@@ -13,7 +13,7 @@ Corresponding author: maria.pierce@thuenen.de
 		- R-script:  script to visualise the results of the experiments in R <br>
 		- Figures:  images and interactive figures produced with the R-script using the given simulation results <br>
 										
-* Documentation: ... to be added
+* Documentation: TRACE_EBC_IBM - extensive description following the TRACE protocol
 										
 * Additional files such as: .mvn/wrapper; mvnw; mvnw.cmd; pom.xml these provide easy execution of experiments and can be ignored
 										
